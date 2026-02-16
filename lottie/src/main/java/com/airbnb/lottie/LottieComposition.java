@@ -19,6 +19,7 @@ import com.airbnb.lottie.model.layer.Layer;
 import com.airbnb.lottie.parser.moshi.JsonReader;
 import com.airbnb.lottie.utils.Logger;
 import com.airbnb.lottie.utils.MiscUtils;
+import com.airbnb.lottie.utils.Utils;
 
 import org.json.JSONObject;
 
@@ -28,6 +29,7 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * After Effects/Bodymovin composition model. This is the serialized model from which the
@@ -44,6 +46,7 @@ public class LottieComposition {
   private final HashSet<String> warnings = new HashSet<>();
   private Map<String, List<Layer>> precomps;
   private Map<String, LottieImageAsset> images;
+  private float imagesDpScale;
   /**
    * Map of font names to fonts
    */
@@ -68,12 +71,15 @@ public class LottieComposition {
    */
   private int maskAndMatteCount = 0;
 
+  private int unscaledWidth;
+  private int unscaledHeight;
+
   @RestrictTo(RestrictTo.Scope.LIBRARY)
   public void init(Rect bounds, float startFrame, float endFrame, float frameRate,
       List<Layer> layers, LongSparseArray<Layer> layerMap, Map<String,
-      List<Layer>> precomps, Map<String, LottieImageAsset> images,
+      List<Layer>> precomps, Map<String, LottieImageAsset> images, float imagesDpScale,
       SparseArrayCompat<FontCharacter> characters, Map<String, Font> fonts,
-      List<Marker> markers) {
+      List<Marker> markers, int unscaledWidth, int unscaledHeight) {
     this.bounds = bounds;
     this.startFrame = startFrame;
     this.endFrame = endFrame;
@@ -82,9 +88,12 @@ public class LottieComposition {
     this.layerMap = layerMap;
     this.precomps = precomps;
     this.images = images;
+    this.imagesDpScale = imagesDpScale;
     this.characters = characters;
     this.fonts = fonts;
     this.markers = markers;
+    this.unscaledWidth = unscaledWidth;
+    this.unscaledHeight = unscaledHeight;
   }
 
   @RestrictTo(RestrictTo.Scope.LIBRARY)
@@ -208,8 +217,19 @@ public class LottieComposition {
    * Returns a map of image asset id to {@link LottieImageAsset}. These assets contain image metadata exported
    * from After Effects or other design tool. The resulting Bitmaps can be set directly on the image asset so
    * they can be loaded once and reused across compositions.
+   *
+   * If the context dp scale has changed since the last time images were retrieved, images will be rescaled.
    */
   public Map<String, LottieImageAsset> getImages() {
+    float dpScale = Utils.dpScale();
+    if (dpScale != imagesDpScale) {
+      Set<Map.Entry<String, LottieImageAsset>> entries = images.entrySet();
+
+      for (Map.Entry<String, LottieImageAsset> entry : entries) {
+        images.put(entry.getKey(), entry.getValue().copyWithScale(imagesDpScale / dpScale));
+      }
+    }
+    imagesDpScale = dpScale;
     return images;
   }
 
@@ -217,6 +237,13 @@ public class LottieComposition {
     return endFrame - startFrame;
   }
 
+  public int getUnscaledWidth() {
+    return unscaledWidth;
+  }
+
+  public int getUnscaledHeight() {
+    return unscaledHeight;
+  }
 
   @NonNull
   @Override
@@ -237,6 +264,7 @@ public class LottieComposition {
    */
   @Deprecated
   public static class Factory {
+
     private Factory() {
     }
 
@@ -363,6 +391,7 @@ public class LottieComposition {
 
     @SuppressWarnings("deprecation")
     private static final class ListenerAdapter implements LottieListener<LottieComposition>, Cancellable {
+
       private final OnCompositionLoadedListener listener;
       private boolean cancelled = false;
 

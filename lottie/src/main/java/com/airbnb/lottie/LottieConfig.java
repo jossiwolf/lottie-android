@@ -2,7 +2,9 @@ package com.airbnb.lottie;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-
+import com.airbnb.lottie.configurations.reducemotion.ReducedMotionOption;
+import com.airbnb.lottie.configurations.reducemotion.IgnoreDisabledSystemAnimationsOption;
+import com.airbnb.lottie.configurations.reducemotion.SystemReducedMotionOption;
 import com.airbnb.lottie.network.LottieNetworkCacheProvider;
 import com.airbnb.lottie.network.LottieNetworkFetcher;
 
@@ -19,13 +21,20 @@ public class LottieConfig {
   @Nullable final LottieNetworkCacheProvider cacheProvider;
   final boolean enableSystraceMarkers;
   final boolean enableNetworkCache;
+  final boolean disablePathInterpolatorCache;
+  final AsyncUpdates defaultAsyncUpdates;
+  final ReducedMotionOption reducedMotionOption;
 
   private LottieConfig(@Nullable LottieNetworkFetcher networkFetcher, @Nullable LottieNetworkCacheProvider cacheProvider,
-      boolean enableSystraceMarkers, boolean enableNetworkCache) {
+      boolean enableSystraceMarkers, boolean enableNetworkCache, boolean disablePathInterpolatorCache,
+      AsyncUpdates defaultAsyncUpdates, ReducedMotionOption reducedMotionOption) {
     this.networkFetcher = networkFetcher;
     this.cacheProvider = cacheProvider;
     this.enableSystraceMarkers = enableSystraceMarkers;
     this.enableNetworkCache = enableNetworkCache;
+    this.disablePathInterpolatorCache = disablePathInterpolatorCache;
+    this.defaultAsyncUpdates = defaultAsyncUpdates;
+    this.reducedMotionOption = reducedMotionOption;
   }
 
   public static final class Builder {
@@ -36,6 +45,9 @@ public class LottieConfig {
     private LottieNetworkCacheProvider cacheProvider;
     private boolean enableSystraceMarkers = false;
     private boolean enableNetworkCache = true;
+    private boolean disablePathInterpolatorCache = false;
+    private AsyncUpdates defaultAsyncUpdates = AsyncUpdates.AUTOMATIC;
+    private ReducedMotionOption reducedMotionOption = new SystemReducedMotionOption();
 
     /**
      * Lottie has a default network fetching stack built on {@link java.net.HttpURLConnection}. However, if you would like to hook into your own
@@ -111,9 +123,49 @@ public class LottieConfig {
       return this;
     }
 
+    /**
+     * When parsing animations, Lottie has a path interpolator cache. This cache allows Lottie to reuse PathInterpolators
+     * across an animation. This is desirable in most cases. However, when shared across screenshot tests, it can cause slight
+     * deviations in the rendering due to underlying approximations in the PathInterpolator.
+     * <p>
+     * The cache is enabled by default and should probably only be disabled for screenshot tests.
+     */
+    @NonNull
+    public Builder setDisablePathInterpolatorCache(boolean disable) {
+      disablePathInterpolatorCache = disable;
+      return this;
+    }
+
+    /**
+     * Sets the default value for async updates.
+     *
+     * @see LottieDrawable#setAsyncUpdates(AsyncUpdates)
+     */
+    @NonNull
+    public Builder setDefaultAsyncUpdates(AsyncUpdates asyncUpdates) {
+      defaultAsyncUpdates = asyncUpdates;
+      return this;
+    }
+
+    /**
+     * Provide your own reduce motion option. By default it uses
+     * {@link SystemReducedMotionOption},
+     * which returns ReducedMotionMode.REDUCED_MOTION when the system AnimationScale is set to 0.
+     * <p>
+     * You can override this behavior by providing your own custom {@link ReducedMotionOption}.
+     * You can also use {@link IgnoreDisabledSystemAnimationsOption}
+     * if you want to ignore the system settings and always play the full animation.
+     */
+    @NonNull
+    public Builder setReducedMotionOption(ReducedMotionOption reducedMotionOption) {
+      this.reducedMotionOption = reducedMotionOption;
+      return this;
+    }
+
     @NonNull
     public LottieConfig build() {
-      return new LottieConfig(networkFetcher, cacheProvider, enableSystraceMarkers, enableNetworkCache);
+      return new LottieConfig(networkFetcher, cacheProvider, enableSystraceMarkers, enableNetworkCache, disablePathInterpolatorCache,
+          defaultAsyncUpdates, reducedMotionOption);
     }
   }
 }

@@ -10,6 +10,7 @@ import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Typeface;
+import android.os.Looper;
 import android.util.Base64;
 
 import androidx.annotation.Nullable;
@@ -41,12 +42,13 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.zip.GZIPInputStream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 import okio.BufferedSource;
 import okio.Okio;
+import okio.Source;
 
 /**
  * Helpers to create or cache a LottieComposition.
@@ -57,6 +59,7 @@ import okio.Okio;
  */
 @SuppressWarnings({"WeakerAccess", "unused", "NullAway"})
 public class LottieCompositionFactory {
+
   /**
    * Keep a map of cache keys to in-progress tasks and return them for new requests.
    * Without this, simultaneous requests to parse a composition will trigger multiple parallel
@@ -69,7 +72,8 @@ public class LottieCompositionFactory {
    * reference magic bytes for zip compressed files.
    * useful to determine if an InputStream is a zip file or not
    */
-  private static final byte[] MAGIC = new byte[]{0x50, 0x4b, 0x03, 0x04};
+  private static final byte[] ZIP_MAGIC = new byte[]{0x50, 0x4b, 0x03, 0x04};
+  private static final byte[] GZIP_MAGIC = new byte[]{0x1f, (byte) 0x8b, 0x08};
 
 
   private LottieCompositionFactory() {
@@ -83,12 +87,27 @@ public class LottieCompositionFactory {
     LottieCompositionCache.getInstance().resize(size);
   }
 
+  /**
+   * Like {@link #clearCache(Context, boolean)} but defaults to clearing the network cache.
+   *
+   * @see #clearCache(Context, boolean)
+   */
   public static void clearCache(Context context) {
+    clearCache(context, true);
+  }
+
+  /**
+   * Clears any pending animations, animations that are parsed and in-memory, and
+   * optionally, any animations loaded from the network that are cached to disk.
+   */
+  public static void clearCache(Context context, boolean includeNetwork) {
     taskCache.clear();
     LottieCompositionCache.getInstance().clear();
-    final NetworkCache networkCache = L.networkCache(context);
-    if (networkCache != null) {
-      networkCache.clear();
+    if (includeNetwork) {
+      final NetworkCache networkCache = L.networkCache(context);
+      if (networkCache != null) {
+        networkCache.clear();
+      }
     }
   }
 
@@ -118,19 +137,25 @@ public class LottieCompositionFactory {
     return fromUrl(context, url, "url_" + url);
   }
 
+  public static LottieTask<LottieComposition> fromUrl(final Context context, final String url, @Nullable final String cacheKey) {
+    // App can override {@link Context#getMainLooper()} to support lottie view on per-window ui thread.
+    return fromUrl(context, context.getMainLooper(), url, cacheKey);
+  }
+
   /**
    * Fetch an animation from an http url. Once it is downloaded once, Lottie will cache the file to disk for
    * future use. Because of this, you may call `fromUrl` ahead of time to warm the cache if you think you
    * might need an animation in the future.
    */
-  public static LottieTask<LottieComposition> fromUrl(final Context context, final String url, @Nullable final String cacheKey) {
-    return cache(cacheKey, () -> {
+  public static LottieTask<LottieComposition> fromUrl(
+      final Context context, final Looper uiLooper, final String url, @Nullable final String cacheKey) {
+    return cache(uiLooper, cacheKey, () -> {
       LottieResult<LottieComposition> result = L.networkFetcher(context).fetchSync(context, url, cacheKey);
       if (cacheKey != null && result.getValue() != null) {
         LottieCompositionCache.getInstance().put(cacheKey, result.getValue());
       }
       return result;
-    });
+    }, null);
   }
 
   /**
@@ -151,6 +176,10 @@ public class LottieCompositionFactory {
    */
   @WorkerThread
   public static LottieResult<LottieComposition> fromUrlSync(Context context, String url, @Nullable String cacheKey) {
+    final LottieComposition cachedComposition = cacheKey == null ? null : LottieCompositionCache.getInstance().get(cacheKey);
+    if (cachedComposition != null) {
+      return new LottieResult<>(cachedComposition);
+    }
     LottieResult<LottieComposition> result = L.networkFetcher(context).fetchSync(context, url, cacheKey);
     if (cacheKey != null && result.getValue() != null) {
       LottieCompositionCache.getInstance().put(cacheKey, result.getValue());
@@ -165,11 +194,16 @@ public class LottieCompositionFactory {
    * <p>
    * To skip the cache, add null as a third parameter.
    *
-   * @see #fromZipStream(ZipInputStream, String)
+   * @see #fromZipStream(Context, ZipInputStream, String)
    */
   public static LottieTask<LottieComposition> fromAsset(Context context, final String fileName) {
     String cacheKey = "asset_" + fileName;
     return fromAsset(context, fileName, cacheKey);
+  }
+
+  public static LottieTask<LottieComposition> fromAsset(Context context, final String fileName, final String cacheKey) {
+    // App can override {@link Context#getMainLooper()} to support lottie view on per-window ui thread.
+    return fromAsset(context, context.getMainLooper(), fileName, cacheKey);
   }
 
   /**
@@ -179,12 +213,12 @@ public class LottieCompositionFactory {
    * <p>
    * Pass null as the cache key to skip the cache.
    *
-   * @see #fromZipStream(ZipInputStream, String)
+   * @see #fromZipStream(Context, ZipInputStream, String)
    */
-  public static LottieTask<LottieComposition> fromAsset(Context context, final String fileName, @Nullable final String cacheKey) {
+  public static LottieTask<LottieComposition> fromAsset(Context context, Looper uiLooper, final String fileName, @Nullable final String cacheKey) {
     // Prevent accidentally leaking an Activity.
     final Context appContext = context.getApplicationContext();
-    return cache(cacheKey, () -> fromAssetSync(appContext, fileName, cacheKey));
+    return cache(uiLooper, cacheKey, () -> fromAssetSync(appContext, fileName, cacheKey), null);
   }
 
   /**
@@ -213,11 +247,53 @@ public class LottieCompositionFactory {
    */
   @WorkerThread
   public static LottieResult<LottieComposition> fromAssetSync(Context context, String fileName, @Nullable String cacheKey) {
+    final LottieComposition cachedComposition = cacheKey == null ? null : LottieCompositionCache.getInstance().get(cacheKey);
+    if (cachedComposition != null) {
+      return new LottieResult<>(cachedComposition);
+    }
     try {
-      if (fileName.endsWith(".zip") || fileName.endsWith(".lottie")) {
-        return fromZipStreamSync(context, new ZipInputStream(context.getAssets().open(fileName)), cacheKey);
+      return fromInputStreamSync(context, context.getAssets().open(fileName), cacheKey);
+    } catch (IOException e) {
+      return new LottieResult<>(e);
+    }
+  }
+
+  /**
+   * Use this when you have an input stream but aren't sure if it is a json, zip, or gzip file.
+   * This will read the file headers to see if it starts with the gzip or zip magic bytes.
+   * @param context is optional and only needed if your zip file contains ttf or otf fonts. If yours doesn't, you may pass null.
+   *                Embedded fonts may be .ttf or .otf files, can be in subdirectories, but must have the same name as the
+   *                font family (fFamily) in your animation file.
+   */
+  public static LottieTask<LottieComposition> fromInputStream(@Nullable Context context, InputStream inputStream, @Nullable String cacheKey) {
+    // App can override {@link Context#getMainLooper()} to support lottie view on per-window ui thread.
+    final Looper uiLooper = context != null ? context.getMainLooper() : Looper.getMainLooper();
+    // Prevent accidentally leaking an Activity.
+    final Context appContext = context == null ? null : context.getApplicationContext();
+    return cache(uiLooper, cacheKey, () -> fromInputStreamSync(appContext, inputStream, cacheKey), null);
+  }
+
+  /**
+   * Use this when you have an input stream but aren't sure if it is a json, zip, or gzip file.
+   * This will read the file headers to see if it starts with the gzip or zip magic bytes.
+   * @param context is optional and only needed if your zip file contains ttf or otf fonts. If yours doesn't, you may pass null.
+   *                Embedded fonts may be .ttf or .otf files, can be in subdirectories, but must have the same name as the
+   *                font family (fFamily) in your animation file.
+   */
+  @WorkerThread
+  public static LottieResult<LottieComposition> fromInputStreamSync(@Nullable Context context, InputStream inputStream, @Nullable String cacheKey) {
+    final LottieComposition cachedComposition = cacheKey == null ? null : LottieCompositionCache.getInstance().get(cacheKey);
+    if (cachedComposition != null) {
+      return new LottieResult<>(cachedComposition);
+    }
+    try {
+      BufferedSource source = Okio.buffer(source(inputStream));
+      if (isZipCompressed(source)) {
+        return fromZipStreamSync(context, new ZipInputStream(source.inputStream()), cacheKey);
+      } else if (isGzipCompressed(source)) {
+        return fromJsonInputStreamSync(new GZIPInputStream(source.inputStream()), cacheKey);
       }
-      return fromJsonInputStreamSync(context.getAssets().open(fileName), cacheKey);
+      return fromJsonReaderSync(JsonReader.of(source), cacheKey);
     } catch (IOException e) {
       return new LottieResult<>(e);
     }
@@ -247,14 +323,16 @@ public class LottieCompositionFactory {
    * Pass null as the cache key to skip caching.
    */
   public static LottieTask<LottieComposition> fromRawRes(Context context, @RawRes final int rawRes, @Nullable final String cacheKey) {
+    // App can override {@link Context#getMainLooper()} to support lottie view on per-window ui thread.
+    final Looper uiLooper = context.getMainLooper();
     // Prevent accidentally leaking an Activity.
     final WeakReference<Context> contextRef = new WeakReference<>(context);
     final Context appContext = context.getApplicationContext();
-    return cache(cacheKey, () -> {
+    return cache(uiLooper, cacheKey, () -> {
       @Nullable Context originalContext = contextRef.get();
       Context context1 = originalContext != null ? originalContext : appContext;
       return fromRawResSync(context1, rawRes, cacheKey);
-    });
+    }, null);
   }
 
   /**
@@ -282,12 +360,23 @@ public class LottieCompositionFactory {
    */
   @WorkerThread
   public static LottieResult<LottieComposition> fromRawResSync(Context context, @RawRes int rawRes, @Nullable String cacheKey) {
+    final LottieComposition cachedComposition = cacheKey == null ? null : LottieCompositionCache.getInstance().get(cacheKey);
+    if (cachedComposition != null) {
+      return new LottieResult<>(cachedComposition);
+    }
     try {
       BufferedSource source = Okio.buffer(source(context.getResources().openRawResource(rawRes)));
       if (isZipCompressed(source)) {
         return fromZipStreamSync(context, new ZipInputStream(source.inputStream()), cacheKey);
+      } else if (isGzipCompressed(source)) {
+        try {
+          return fromJsonInputStreamSync(new GZIPInputStream(source.inputStream()), cacheKey);
+        } catch (IOException e) {
+          // This shouldn't happen because we check the header for magic bytes.
+          return new LottieResult<>(e);
+        }
       }
-      return fromJsonInputStreamSync(source.inputStream(), cacheKey);
+      return fromJsonReaderSync(JsonReader.of(source), cacheKey);
     } catch (Resources.NotFoundException e) {
       return new LottieResult<>(e);
     }
@@ -310,8 +399,24 @@ public class LottieCompositionFactory {
    *
    * @see #fromJsonInputStreamSync(InputStream, String, boolean)
    */
+  public static LottieTask<LottieComposition> fromJsonInputStream(final Context context, final InputStream stream, @Nullable final String cacheKey) {
+    // App can override {@link Context#getMainLooper()} to support lottie view on per-window ui thread.
+    return cache(context.getMainLooper(), cacheKey, () -> fromJsonInputStreamSync(stream, cacheKey), () -> closeQuietly(stream));
+  }
+
   public static LottieTask<LottieComposition> fromJsonInputStream(final InputStream stream, @Nullable final String cacheKey) {
-    return cache(cacheKey, () -> fromJsonInputStreamSync(stream, cacheKey));
+    return cache(cacheKey, () -> fromJsonInputStreamSync(stream, cacheKey), () -> closeQuietly(stream));
+  }
+
+  /**
+   * @see #fromJsonInputStreamSync(InputStream, String, boolean)
+   */
+  public static LottieTask<LottieComposition> fromJsonInputStream(final InputStream stream, @Nullable final String cacheKey, boolean close) {
+    return cache(cacheKey, () -> fromJsonInputStreamSync(stream, cacheKey, close), () -> {
+      if (close) {
+        closeQuietly(stream);
+      }
+    });
   }
 
   /**
@@ -322,18 +427,13 @@ public class LottieCompositionFactory {
     return fromJsonInputStreamSync(stream, cacheKey, true);
   }
 
-
+  /**
+   * Return a LottieComposition for the given InputStream to json.
+   */
   @WorkerThread
-  private static LottieResult<LottieComposition> fromJsonInputStreamSync(InputStream stream, @Nullable String cacheKey, boolean close) {
-    try {
-      return fromJsonReaderSync(JsonReader.of(buffer(source(stream))), cacheKey);
-    } finally {
-      if (close) {
-        closeQuietly(stream);
-      }
-    }
+  public static LottieResult<LottieComposition> fromJsonInputStreamSync(InputStream stream, @Nullable String cacheKey, boolean close) {
+    return fromJsonSourceSync(source(stream), cacheKey, close);
   }
-
 
   /**
    * @see #fromJsonSync(JSONObject, String)
@@ -343,7 +443,7 @@ public class LottieCompositionFactory {
     return cache(cacheKey, () -> {
       //noinspection deprecation
       return fromJsonSync(json, cacheKey);
-    });
+    }, null);
   }
 
   /**
@@ -353,7 +453,7 @@ public class LottieCompositionFactory {
    */
   @Deprecated
   @WorkerThread
-  public static LottieResult<LottieComposition> fromJsonSync(JSONObject json, @Nullable String cacheKey) {
+  public static LottieResult<LottieComposition> fromJsonSync(final JSONObject json, @Nullable String cacheKey) {
     return fromJsonStringSync(json.toString(), cacheKey);
   }
 
@@ -361,7 +461,12 @@ public class LottieCompositionFactory {
    * @see #fromJsonStringSync(String, String)
    */
   public static LottieTask<LottieComposition> fromJsonString(final String json, @Nullable final String cacheKey) {
-    return cache(cacheKey, () -> fromJsonStringSync(json, cacheKey));
+    return cache(cacheKey, () -> fromJsonStringSync(json, cacheKey), null);
+  }
+
+  public static LottieTask<LottieComposition> fromJsonString(final Context context, final String json, @Nullable final String cacheKey) {
+    // App can override {@link Context#getMainLooper()} to support lottie view on per-window ui thread.
+    return cache(context.getMainLooper(), cacheKey, () -> fromJsonStringSync(json, cacheKey), null);
   }
 
   /**
@@ -370,26 +475,47 @@ public class LottieCompositionFactory {
    */
   @WorkerThread
   public static LottieResult<LottieComposition> fromJsonStringSync(String json, @Nullable String cacheKey) {
-
-
     ByteArrayInputStream stream = new ByteArrayInputStream(json.getBytes());
-    return fromJsonReaderSync(JsonReader.of(buffer(source(stream))), cacheKey);
+    return fromJsonSourceSync(source(stream), cacheKey);
+  }
+
+  public static LottieTask<LottieComposition> fromJsonSource(final Source source, @Nullable final String cacheKey) {
+    return cache(cacheKey, () -> fromJsonSourceSync(source, cacheKey), () -> Utils.closeQuietly(source));
+  }
+
+  @WorkerThread
+  public static LottieResult<LottieComposition> fromJsonSourceSync(final Source source, @Nullable String cacheKey) {
+    return fromJsonSourceSync(source, cacheKey, true);
+  }
+
+  @WorkerThread
+  public static LottieResult<LottieComposition> fromJsonSourceSync(final Source source, @Nullable String cacheKey,
+      boolean close) {
+    return fromJsonReaderSyncInternal(JsonReader.of(buffer(source)), cacheKey, close);
   }
 
   public static LottieTask<LottieComposition> fromJsonReader(final JsonReader reader, @Nullable final String cacheKey) {
-    return cache(cacheKey, () -> fromJsonReaderSync(reader, cacheKey));
+    return cache(cacheKey, () -> fromJsonReaderSync(reader, cacheKey), () -> Utils.closeQuietly(reader));
   }
-
 
   @WorkerThread
-  public static LottieResult<LottieComposition> fromJsonReaderSync(com.airbnb.lottie.parser.moshi.JsonReader reader, @Nullable String cacheKey) {
-    return fromJsonReaderSyncInternal(reader, cacheKey, true);
+  public static LottieResult<LottieComposition> fromJsonReaderSync(final JsonReader reader, @Nullable String cacheKey) {
+    return fromJsonReaderSync(reader, cacheKey, true);
   }
 
+  @WorkerThread
+  public static LottieResult<LottieComposition> fromJsonReaderSync(final JsonReader reader, @Nullable String cacheKey,
+      boolean close) {
+    return fromJsonReaderSyncInternal(reader, cacheKey, close);
+  }
 
   private static LottieResult<LottieComposition> fromJsonReaderSyncInternal(
-      com.airbnb.lottie.parser.moshi.JsonReader reader, @Nullable String cacheKey, boolean close) {
+      JsonReader reader, @Nullable String cacheKey, boolean close) {
     try {
+      final LottieComposition cachedComposition = cacheKey == null ? null : LottieCompositionCache.getInstance().get(cacheKey);
+      if (cachedComposition != null) {
+        return new LottieResult<>(cachedComposition);
+      }
       LottieComposition composition = LottieCompositionMoshiParser.parse(reader);
       if (cacheKey != null) {
         LottieCompositionCache.getInstance().put(cacheKey, composition);
@@ -404,7 +530,6 @@ public class LottieCompositionFactory {
     }
   }
 
-
   /**
    * In this overload, embedded fonts will NOT be parsed. If your zip file has custom fonts, use the overload
    * that takes Context as the first parameter.
@@ -414,10 +539,75 @@ public class LottieCompositionFactory {
   }
 
   /**
+   * In this overload, embedded fonts will NOT be parsed. If your zip file has custom fonts, use the overload
+   * that takes Context as the first parameter.
+   */
+  public static LottieTask<LottieComposition> fromZipStream(final ZipInputStream inputStream, @Nullable final String cacheKey, boolean close) {
+    return fromZipStream(null, inputStream, cacheKey, close);
+  }
+
+  /**
    * @see #fromZipStreamSync(Context, ZipInputStream, String)
    */
-  public static LottieTask<LottieComposition> fromZipStream(Context context, final ZipInputStream inputStream, @Nullable final String cacheKey) {
-    return cache(cacheKey, () -> fromZipStreamSync(context, inputStream, cacheKey));
+  public static LottieTask<LottieComposition> fromZipStream(@Nullable Context context, final ZipInputStream inputStream,
+      @Nullable final String cacheKey) {
+    // App can override {@link Context#getMainLooper()} to support lottie view on per-window ui thread.
+    Looper uiLooper = context != null ? context.getMainLooper() : Looper.getMainLooper();
+    return cache(uiLooper, cacheKey, () -> fromZipStreamSync(context, inputStream, cacheKey), () -> closeQuietly(inputStream));
+  }
+
+  /**
+   * @see #fromZipStreamSync(Context, ZipInputStream, String)
+   */
+  public static LottieTask<LottieComposition> fromZipStream(@Nullable Context context, final ZipInputStream inputStream,
+      @Nullable final String cacheKey, boolean close) {
+    // App can override {@link Context#getMainLooper()} to support lottie view on per-window ui thread.
+    Looper uiLooper = context != null ? context.getMainLooper() : Looper.getMainLooper();
+    return cache(uiLooper, cacheKey, () -> fromZipStreamSync(context, inputStream, cacheKey), close ? () -> closeQuietly(inputStream) : null);
+  }
+
+  /**
+   * Parses a zip input stream into a Lottie composition.
+   * Your zip file should just be a folder with your json file and images zipped together.
+   * It will automatically store and configure any images inside the animation if they exist.
+   * <p>
+   * In this overload, embedded fonts will NOT be parsed. If your zip file has custom fonts, use the overload
+   * that takes Context as the first parameter.
+   * <p>
+   * The ZipInputStream will be automatically closed at the end. If you would like to keep it open, use the overload
+   * with a close parameter and pass in false.
+   */
+  public static LottieResult<LottieComposition> fromZipStreamSync(ZipInputStream inputStream, @Nullable String cacheKey) {
+    return fromZipStreamSync(inputStream, cacheKey, true);
+  }
+
+  /**
+   * Parses a zip input stream into a Lottie composition.
+   * Your zip file should just be a folder with your json file and images zipped together.
+   * It will automatically store and configure any images inside the animation if they exist.
+   * <p>
+   * In this overload, embedded fonts will NOT be parsed. If your zip file has custom fonts, use the overload
+   * that takes Context as the first parameter.
+   */
+  public static LottieResult<LottieComposition> fromZipStreamSync(ZipInputStream inputStream, @Nullable String cacheKey, boolean close) {
+    return fromZipStreamSync(null, inputStream, cacheKey, close);
+  }
+
+  /**
+   * Parses a zip input stream into a Lottie composition.
+   * Your zip file should just be a folder with your json file and images zipped together.
+   * It will automatically store and configure any images inside the animation if they exist.
+   * <p>
+   * The ZipInputStream will be automatically closed at the end. If you would like to keep it open, use the overload
+   * with a close parameter and pass in false.
+   *
+   * @param context is optional and only needed if your zip file contains ttf or otf fonts. If yours doesn't, you may pass null.
+   *                Embedded fonts may be .ttf or .otf files, can be in subdirectories, but must have the same name as the
+   *                font family (fFamily) in your animation file.
+   */
+  @WorkerThread
+  public static LottieResult<LottieComposition> fromZipStreamSync(@Nullable Context context, ZipInputStream inputStream, @Nullable String cacheKey) {
+    return fromZipStreamSync(context, inputStream, cacheKey, true);
   }
 
   /**
@@ -425,38 +615,34 @@ public class LottieCompositionFactory {
    * Your zip file should just be a folder with your json file and images zipped together.
    * It will automatically store and configure any images inside the animation if they exist.
    *
-   * In this overload, embedded fonts will NOT be parsed. If your zip file has custom fonts, use the overload
-   * that takes Context as the first parameter.
+   * @param context is optional and only needed if your zip file contains ttf or otf fonts. If yours doesn't, you may pass null.
+   *                Embedded fonts may be .ttf or .otf files, can be in subdirectories, but must have the same name as the
+   *                font family (fFamily) in your animation file.
    */
-  public static LottieResult<LottieComposition> fromZipStreamSync(ZipInputStream inputStream, @Nullable String cacheKey) {
-    return fromZipStreamSync(null, inputStream, cacheKey);
-  }
-
-    /**
-     * Parses a zip input stream into a Lottie composition.
-     * Your zip file should just be a folder with your json file and images zipped together.
-     * It will automatically store and configure any images inside the animation if they exist.
-     *
-     * @param context is optional and only needed if your zip file contains ttf or otf fonts. If yours doesn't, you may pass null.
-     *                Embedded fonts may be .ttf or .otf files, can be in subdirectories, but must have the same name as the
-     *                font family (fFamily) in your animation file.
-     */
   @WorkerThread
-  public static LottieResult<LottieComposition> fromZipStreamSync(@Nullable Context context, ZipInputStream inputStream, @Nullable String cacheKey) {
+  public static LottieResult<LottieComposition> fromZipStreamSync(@Nullable Context context, ZipInputStream inputStream,
+      @Nullable String cacheKey, boolean close) {
     try {
       return fromZipStreamSyncInternal(context, inputStream, cacheKey);
     } finally {
-      closeQuietly(inputStream);
+      if (close) {
+        closeQuietly(inputStream);
+      }
     }
   }
 
   @WorkerThread
-  private static LottieResult<LottieComposition> fromZipStreamSyncInternal(Context context, ZipInputStream inputStream, @Nullable String cacheKey) {
+  private static LottieResult<LottieComposition> fromZipStreamSyncInternal(@Nullable Context context, ZipInputStream inputStream,
+      @Nullable String cacheKey) {
     LottieComposition composition = null;
     Map<String, Bitmap> images = new HashMap<>();
     Map<String, Typeface> fonts = new HashMap<>();
 
     try {
+      final LottieComposition cachedComposition = cacheKey == null ? null : LottieCompositionCache.getInstance().get(cacheKey);
+      if (cachedComposition != null) {
+        return new LottieResult<>(cachedComposition);
+      }
       ZipEntry entry = inputStream.getNextEntry();
       while (entry != null) {
         final String entryName = entry.getName();
@@ -465,7 +651,7 @@ public class LottieCompositionFactory {
         } else if (entry.getName().equalsIgnoreCase("manifest.json")) { //ignore .lottie manifest
           inputStream.closeEntry();
         } else if (entry.getName().contains(".json")) {
-          com.airbnb.lottie.parser.moshi.JsonReader reader = JsonReader.of(buffer(source(inputStream)));
+          JsonReader reader = JsonReader.of(buffer(source(inputStream)));
           composition = LottieCompositionFactory.fromJsonReaderSyncInternal(reader, null, false).getValue();
         } else if (entryName.contains(".png") || entryName.contains(".webp") || entryName.contains(".jpg") || entryName.contains(".jpeg")) {
           String[] splitName = entryName.split("/");
@@ -475,9 +661,14 @@ public class LottieCompositionFactory {
           String[] splitName = entryName.split("/");
           String fileName = splitName[splitName.length - 1];
           String fontFamily = fileName.split("\\.")[0];
+
+          if (context == null) {
+            return new LottieResult<>(
+                new IllegalStateException("Unable to extract font " + fontFamily + " please pass a non-null Context parameter"));
+          }
+
           File tempFile = new File(context.getCacheDir(), fileName);
-          FileOutputStream fos = new FileOutputStream(tempFile);
-          try {
+          try (FileOutputStream fos = new FileOutputStream(tempFile)) {
             try (OutputStream output = new FileOutputStream(tempFile)) {
               byte[] buffer = new byte[4 * 1024];
               int read;
@@ -549,15 +740,12 @@ public class LottieCompositionFactory {
             Logger.warning("data URL did not have correct base64 format.", e);
             return null;
           }
-          asset.setBitmap(BitmapFactory.decodeByteArray(data, 0, data.length, opts));
+          Bitmap bitmap = BitmapFactory.decodeByteArray(data, 0, data.length, opts);
+          if (bitmap != null) {
+            bitmap = Utils.resizeBitmapIfNeeded(bitmap, asset.getWidth(), asset.getHeight());
+            asset.setBitmap(bitmap);
+          }
         }
-      }
-    }
-
-    // Ensure that all bitmaps have been set.
-    for (Map.Entry<String, LottieImageAsset> entry : composition.getImages().entrySet()) {
-      if (entry.getValue().getBitmap() == null) {
-        return new LottieResult<>(new IllegalStateException("There is no image for " + entry.getValue().getFileName()));
       }
     }
 
@@ -571,9 +759,20 @@ public class LottieCompositionFactory {
    * Check if a given InputStream points to a .zip compressed file
    */
   private static Boolean isZipCompressed(BufferedSource inputSource) {
+    return matchesMagicBytes(inputSource, ZIP_MAGIC);
+  }
+
+  /**
+   * Check if a given InputStream points to a .gzip compressed file
+   */
+  private static Boolean isGzipCompressed(BufferedSource inputSource) {
+    return matchesMagicBytes(inputSource, GZIP_MAGIC);
+  }
+
+  private static Boolean matchesMagicBytes(BufferedSource inputSource, byte[] magic) {
     try {
       BufferedSource peek = inputSource.peek();
-      for (byte b : MAGIC) {
+      for (byte b : magic) {
         if (peek.readByte() != b) {
           return false;
         }
@@ -599,22 +798,34 @@ public class LottieCompositionFactory {
     return null;
   }
 
+  private static LottieTask<LottieComposition> cache(
+      @Nullable final String cacheKey, Callable<LottieResult<LottieComposition>> callable, @Nullable Runnable onCached) {
+    return cache(Looper.getMainLooper(), cacheKey, callable, onCached);
+  }
+
   /**
    * First, check to see if there are any in-progress tasks associated with the cache key and return it if there is.
    * If not, create a new task for the callable.
    * Then, add the new task to the task cache and set up listeners so it gets cleared when done.
    */
   private static LottieTask<LottieComposition> cache(
-      @Nullable final String cacheKey, Callable<LottieResult<LottieComposition>> callable) {
+      final Looper uiLooper, @Nullable final String cacheKey, Callable<LottieResult<LottieComposition>> callable, @Nullable Runnable onCached) {
+    LottieTask<LottieComposition> task = null;
     final LottieComposition cachedComposition = cacheKey == null ? null : LottieCompositionCache.getInstance().get(cacheKey);
     if (cachedComposition != null) {
-      return new LottieTask<>(() -> new LottieResult<>(cachedComposition));
+      task = new LottieTask<>(uiLooper, cachedComposition);
     }
     if (cacheKey != null && taskCache.containsKey(cacheKey)) {
-      return taskCache.get(cacheKey);
+      task = taskCache.get(cacheKey);
+    }
+    if (task != null) {
+      if (onCached != null) {
+        onCached.run();
+      }
+      return task;
     }
 
-    LottieTask<LottieComposition> task = new LottieTask<>(callable);
+    task = new LottieTask<>(uiLooper, callable);
     if (cacheKey != null) {
       AtomicBoolean resultAlreadyCalled = new AtomicBoolean(false);
       task.addListener(result -> {

@@ -5,7 +5,11 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.net.toUri
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.updatePadding
 import androidx.fragment.app.Fragment
+import androidx.fragment.app.commit
 import com.airbnb.lottie.samples.databinding.MainActivityBinding
 import com.airbnb.lottie.samples.utils.viewBinding
 
@@ -17,16 +21,34 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding.bottomNavigation.setOnItemSelectedListener listener@{ item ->
             when (item.itemId) {
-                R.id.showcase -> showFragment(ShowcaseFragment())
                 R.id.preview -> showFragment(PreviewFragment())
                 R.id.lottiefiles -> showFragment(LottiefilesFragment())
                 R.id.learn -> showShowcase()
             }
             true
         }
+        binding.bottomNavigation.itemIconTintList = null
+
+        updateContentPaddingForSystemWindowInsets()
 
         if (savedInstanceState == null) {
-            showFragment(ShowcaseFragment())
+            showFragment(PreviewFragment())
+        }
+    }
+
+    private fun updateContentPaddingForSystemWindowInsets() {
+        ViewCompat.setOnApplyWindowInsetsListener(binding.content) { v, insets ->
+            val bars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars()
+                        or WindowInsetsCompat.Type.displayCutout(),
+            )
+            v.updatePadding(
+                left = bars.left,
+                top = bars.top,
+                right = bars.right,
+                bottom = bars.bottom,
+            )
+            WindowInsetsCompat.CONSUMED
         }
     }
 
@@ -36,8 +58,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showFragment(fragment: Fragment) {
-        supportFragmentManager.beginTransaction()
-            .replace(R.id.content, fragment)
-            .commit()
+        supportFragmentManager.commit {
+            replace(R.id.content, fragment)
+        }
     }
 }

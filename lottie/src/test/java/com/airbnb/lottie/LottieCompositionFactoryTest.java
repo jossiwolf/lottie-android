@@ -18,7 +18,9 @@ import static junit.framework.Assert.assertNotSame;
 import static junit.framework.Assert.assertNull;
 import static okio.Okio.buffer;
 import static okio.Okio.source;
-import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertNotEquals;
+
+import okio.Source;
 
 @SuppressWarnings("ReferenceEquality")
 public class LottieCompositionFactoryTest extends BaseTest {
@@ -45,11 +47,33 @@ public class LottieCompositionFactoryTest extends BaseTest {
         assertNotNull(result.getValue());
     }
 
+  @Test
+  public void testLoadJsonStringHitsCache() {
+    LottieResult<LottieComposition> result1 = LottieCompositionFactory.fromJsonStringSync(JSON, "json");
+    LottieResult<LottieComposition> result2 = LottieCompositionFactory.fromJsonStringSync(JSON, "json");
+    assertEquals(result1, result2);
+  }
+
+  @Test
+  public void testLoadDifferentJsonStringsDoesntHitsCache() {
+    LottieResult<LottieComposition> result1 = LottieCompositionFactory.fromJsonStringSync(JSON, "jso1");
+    LottieResult<LottieComposition> result2 = LottieCompositionFactory.fromJsonStringSync(JSON, "json2");
+    assertNotEquals(result1, result2);
+  }
+
     @Test
     public void testLoadInvalidJsonString() {
         LottieResult<LottieComposition> result = LottieCompositionFactory.fromJsonStringSync(NOT_JSON, "not_json");
         assertNotNull(result.getException());
         assertNull(result.getValue());
+    }
+
+    @Test
+    public void testLoadJsonSource() {
+        Source source = source(new ByteArrayInputStream(JSON.getBytes()));
+        LottieResult<LottieComposition> result = LottieCompositionFactory.fromJsonSourceSync(source, "json");
+        assertNull(result.getException());
+        assertNotNull(result.getValue());
     }
 
     @Test

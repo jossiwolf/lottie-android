@@ -1,3 +1,29 @@
+pluginManagement {
+  repositories {
+    gradlePluginPortal()
+    google()
+  }
+}
+
+plugins {
+  id 'de.fayard.refreshVersions' version '0.51.0'
+////                         # available:'0.60.0'
+////                         # available:'0.60.1'
+////                         # available:'0.60.2'
+////                         # available:'0.60.3'
+////                         # available:'0.60.4'
+////                         # available:'0.60.5'
+}
+
+dependencyResolutionManagement {
+  repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+  repositories {
+    google()
+    mavenCentral()
+    maven { url 'https://jitpack.io' }
+  }
+}
+
 include ':lottie'
 include ':lottie-compose'
 include ':sample'
@@ -5,4 +31,6 @@ include ':sample-compose'
 include ':issue-repro'
 include ':issue-repro-compose'
 include ':snapshot-tests'
-include ':sample-compose-benchmark'
+include ':benchmark'
+include ':app-benchmark'
+include ':baselineprofile'

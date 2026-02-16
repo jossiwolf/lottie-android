@@ -31,7 +31,9 @@ public class AnimatableTransformParser {
       "so", // 7
       "eo", // 8
       "sk", // 9
-      "sa"  // 10
+      "sa", // 10
+      "rx", // 11
+      "ry"  // 12
   );
   private static final JsonReader.Options ANIMATABLE_NAMES = JsonReader.Options.of("k");
 
@@ -46,6 +48,9 @@ public class AnimatableTransformParser {
     AnimatableFloatValue endOpacity = null;
     AnimatableFloatValue skew = null;
     AnimatableFloatValue skewAngle = null;
+    AnimatableFloatValue rotationX = null;
+    AnimatableFloatValue rotationY = null;
+    AnimatableFloatValue rotationZ = null;
 
     boolean isObject = reader.peek() == JsonReader.Token.BEGIN_OBJECT;
     if (isObject) {
@@ -75,7 +80,9 @@ public class AnimatableTransformParser {
           scale = AnimatableValueParser.parseScale(reader, composition);
           break;
         case 3: // rz
-          composition.addWarning("Lottie doesn't support 3D layers.");
+          rotationZ = AnimatableValueParser.parseFloat(reader, composition, false);
+          ensureValidRotationKeyframes(rotationZ, composition);
+          break;
         case 4: // r
           /*
            * Sometimes split path rotation gets exported like:
@@ -88,11 +95,7 @@ public class AnimatableTransformParser {
            * which doesn't parse to a real keyframe.
            */
           rotation = AnimatableValueParser.parseFloat(reader, composition, false);
-          if (rotation.getKeyframes().isEmpty()) {
-            rotation.getKeyframes().add(new Keyframe<>(composition, 0f, 0f, null, 0f, composition.getEndFrame()));
-          } else if (rotation.getKeyframes().get(0).startValue == null) {
-            rotation.getKeyframes().set(0, new Keyframe<>(composition, 0f, 0f, null, 0f, composition.getEndFrame()));
-          }
+          ensureValidRotationKeyframes(rotation, composition);
           break;
         case 5: // o
           opacity = AnimatableValueParser.parseInteger(reader, composition);
@@ -108,6 +111,14 @@ public class AnimatableTransformParser {
           break;
         case 9: // sa
           skewAngle = AnimatableValueParser.parseFloat(reader, composition, false);
+          break;
+        case 10: // rx
+          rotationX = AnimatableValueParser.parseFloat(reader, composition, false);
+          ensureValidRotationKeyframes(rotationX, composition);
+          break;
+        case 11: // ry
+          rotationY = AnimatableValueParser.parseFloat(reader, composition, false);
+          ensureValidRotationKeyframes(rotationY, composition);
           break;
         default:
           reader.skipName();
@@ -136,7 +147,16 @@ public class AnimatableTransformParser {
     if (isSkewAngleIdentity(skewAngle)) {
       skewAngle = null;
     }
-    return new AnimatableTransform(anchorPoint, position, scale, rotation, opacity, startOpacity, endOpacity, skew, skewAngle);
+    if (isRotationIdentity(rotationX)) {
+      rotationX = null;
+    }
+    if (isRotationIdentity(rotationY)) {
+      rotationY = null;
+    }
+    if (isRotationIdentity(rotationZ)) {
+      rotationZ = null;
+    }
+    return new AnimatableTransform(anchorPoint, position, scale, rotation, opacity, startOpacity, endOpacity, skew, skewAngle, rotationX, rotationY, rotationZ);
   }
 
   private static boolean isAnchorPointIdentity(AnimatablePathValue anchorPoint) {
@@ -163,5 +183,17 @@ public class AnimatableTransformParser {
 
   private static boolean isSkewAngleIdentity(AnimatableFloatValue skewAngle) {
     return skewAngle == null || (skewAngle.isStatic() && skewAngle.getKeyframes().get(0).startValue == 0f);
+  }
+
+  /**
+   * Helper method to ensure rotation values have valid keyframes
+   * Some rotation exports may have empty or null startValue keyframes
+   */
+  private static void ensureValidRotationKeyframes(AnimatableFloatValue rotation, LottieComposition composition) {
+    if (rotation.getKeyframes().isEmpty()) {
+      rotation.getKeyframes().add(new Keyframe<>(composition, 0f, 0f, null, 0f, composition.getEndFrame()));
+    } else if (rotation.getKeyframes().get(0).startValue == null) {
+      rotation.getKeyframes().set(0, new Keyframe<>(composition, 0f, 0f, null, 0f, composition.getEndFrame()));
+    }
   }
 }

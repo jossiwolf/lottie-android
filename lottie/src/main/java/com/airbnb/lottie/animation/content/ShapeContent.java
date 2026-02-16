@@ -5,16 +5,20 @@ import android.graphics.Path;
 import androidx.annotation.Nullable;
 
 import com.airbnb.lottie.LottieDrawable;
+import com.airbnb.lottie.LottieProperty;
 import com.airbnb.lottie.animation.keyframe.BaseKeyframeAnimation;
 import com.airbnb.lottie.animation.keyframe.ShapeKeyframeAnimation;
+import com.airbnb.lottie.model.KeyPath;
 import com.airbnb.lottie.model.content.ShapePath;
 import com.airbnb.lottie.model.content.ShapeTrimPath;
 import com.airbnb.lottie.model.layer.BaseLayer;
+import com.airbnb.lottie.utils.MiscUtils;
+import com.airbnb.lottie.value.LottieValueCallback;
 
 import java.util.ArrayList;
 import java.util.List;
 
-public class ShapeContent implements PathContent, BaseKeyframeAnimation.AnimationListener {
+public class ShapeContent implements PathContent, BaseKeyframeAnimation.AnimationListener, KeyPathElementContent {
   private final Path path = new Path();
 
   private final String name;
@@ -58,6 +62,7 @@ public class ShapeContent implements PathContent, BaseKeyframeAnimation.Animatio
         if (shapeModifierContents == null) {
           shapeModifierContents = new ArrayList<>();
         }
+        ((ShapeModifierContent) content).addUpdateListener(this);
         shapeModifierContents.add((ShapeModifierContent) content);
       }
     }
@@ -65,7 +70,7 @@ public class ShapeContent implements PathContent, BaseKeyframeAnimation.Animatio
   }
 
   @Override public Path getPath() {
-    if (isPathValid) {
+    if (isPathValid && !shapeAnimation.hasValueCallback()) {
       return path;
     }
 
@@ -93,5 +98,18 @@ public class ShapeContent implements PathContent, BaseKeyframeAnimation.Animatio
 
   @Override public String getName() {
     return name;
+  }
+
+  @Override public void resolveKeyPath(
+      KeyPath keyPath, int depth, List<KeyPath> accumulator, KeyPath currentPartialKeyPath) {
+    MiscUtils.resolveKeyPath(keyPath, depth, accumulator, currentPartialKeyPath, this);
+  }
+
+  @SuppressWarnings("unchecked")
+  @Override
+  public <T> void addValueCallback(T property, @Nullable LottieValueCallback<T> callback) {
+    if (property == LottieProperty.PATH) {
+      shapeAnimation.setValueCallback((LottieValueCallback<Path>) callback);
+    }
   }
 }

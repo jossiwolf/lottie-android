@@ -14,6 +14,7 @@ import android.os.Build;
 import androidx.annotation.CallSuper;
 import androidx.annotation.FloatRange;
 import androidx.annotation.Nullable;
+import androidx.core.graphics.PaintCompat;
 
 import com.airbnb.lottie.L;
 import com.airbnb.lottie.LottieComposition;
@@ -28,9 +29,11 @@ import com.airbnb.lottie.animation.keyframe.TransformKeyframeAnimation;
 import com.airbnb.lottie.model.KeyPath;
 import com.airbnb.lottie.model.KeyPathElement;
 import com.airbnb.lottie.model.content.BlurEffect;
+import com.airbnb.lottie.model.content.LBlendMode;
 import com.airbnb.lottie.model.content.Mask;
 import com.airbnb.lottie.model.content.ShapeData;
 import com.airbnb.lottie.parser.DropShadowEffect;
+import com.airbnb.lottie.utils.DropShadow;
 import com.airbnb.lottie.utils.Logger;
 import com.airbnb.lottie.utils.Utils;
 import com.airbnb.lottie.value.LottieValueCallback;
@@ -89,7 +92,7 @@ public abstract class BaseLayer
   private final RectF matteBoundsRect = new RectF();
   private final RectF tempMaskBoundsRect = new RectF();
   private final String drawTraceName;
-  final Matrix boundsMatrix = new Matrix();
+  protected final Matrix boundsMatrix = new Matrix();
   final LottieDrawable lottieDrawable;
   final Layer layerModel;
   @Nullable
@@ -107,7 +110,7 @@ public abstract class BaseLayer
   private List<BaseLayer> parentLayers;
 
   private final List<BaseKeyframeAnimation<?, ?>> animations = new ArrayList<>();
-  final TransformKeyframeAnimation transform;
+  public final TransformKeyframeAnimation transform;
   private boolean visible = true;
 
   private boolean outlineMasksAndMattes;
@@ -115,6 +118,8 @@ public abstract class BaseLayer
 
   float blurMaskFilterRadius = 0f;
   @Nullable BlurMaskFilter blurMaskFilter;
+
+  @Nullable LPaint solidWhitePaint;
 
   BaseLayer(LottieDrawable lottieDrawable, Layer layerModel) {
     this.lottieDrawable = lottieDrawable;
@@ -227,20 +232,24 @@ public abstract class BaseLayer
   }
 
   @Override
-  public void draw(Canvas canvas, Matrix parentMatrix, int parentAlpha) {
+  public void draw(Canvas canvas, Matrix parentMatrix, int parentAlpha, @Nullable DropShadow shadowToApply) {
     L.beginSection(drawTraceName);
     if (!visible || layerModel.isHidden()) {
       L.endSection(drawTraceName);
       return;
     }
     buildParentLayerListIfNeeded();
-    L.beginSection("Layer#parentMatrix");
+    if (L.isTraceEnabled()) {
+      L.beginSection("Layer#parentMatrix");
+    }
     matrix.reset();
     matrix.set(parentMatrix);
     for (int i = parentLayers.size() - 1; i >= 0; i--) {
       matrix.preConcat(parentLayers.get(i).transform.getMatrix());
     }
-    L.endSection("Layer#parentMatrix");
+    if (L.isTraceEnabled()) {
+      L.endSection("Layer#parentMatrix");
+    }
     // It is unclear why but getting the opacity here would sometimes NPE.
     // The extra code here is designed to avoid this.
     // https://github.com/airbnb/lottie-android/issues/2083
@@ -253,16 +262,22 @@ public abstract class BaseLayer
       }
     }
     int alpha = (int) ((parentAlpha / 255f * (float) opacity / 100f) * 255);
-    if (!hasMatteOnThisLayer() && !hasMasksOnThisLayer()) {
+    if (!hasMatteOnThisLayer() && !hasMasksOnThisLayer() && getBlendMode() == LBlendMode.NORMAL) {
       matrix.preConcat(transform.getMatrix());
-      L.beginSection("Layer#drawLayer");
-      drawLayer(canvas, matrix, alpha);
-      L.endSection("Layer#drawLayer");
+      if (L.isTraceEnabled()) {
+        L.beginSection("Layer#drawLayer");
+      }
+      drawLayer(canvas, matrix, alpha, shadowToApply);
+      if (L.isTraceEnabled()) {
+        L.endSection("Layer#drawLayer");
+      }
       recordRenderTime(L.endSection(drawTraceName));
       return;
     }
 
-    L.beginSection("Layer#computeBounds");
+    if (L.isTraceEnabled()) {
+      L.beginSection("Layer#computeBounds");
+    }
     getBounds(rect, matrix, false);
 
     intersectBoundsWithMatte(rect, parentMatrix);
@@ -284,44 +299,87 @@ public abstract class BaseLayer
       rect.set(0, 0, 0, 0);
     }
 
-    L.endSection("Layer#computeBounds");
+    if (L.isTraceEnabled()) {
+      L.endSection("Layer#computeBounds");
+    }
 
     // Ensure that what we are drawing is >=1px of width and height.
     // On older devices, drawing to an offscreen buffer of <1px would draw back as a black bar.
     // https://github.com/airbnb/lottie-android/issues/1625
     if (rect.width() >= 1f && rect.height() >= 1f) {
-      L.beginSection("Layer#saveLayer");
+      if (L.isTraceEnabled()) {
+        L.beginSection("Layer#saveLayer");
+      }
       contentPaint.setAlpha(255);
+      PaintCompat.setBlendMode(contentPaint, getBlendMode().toNativeBlendMode());
+
       Utils.saveLayerCompat(canvas, rect, contentPaint);
-      L.endSection("Layer#saveLayer");
+      if (L.isTraceEnabled()) {
+        L.endSection("Layer#saveLayer");
+      }
 
       // Clear the off screen buffer. This is necessary for some phones.
-      clearCanvas(canvas);
-      L.beginSection("Layer#drawLayer");
-      drawLayer(canvas, matrix, alpha);
-      L.endSection("Layer#drawLayer");
+      if (getBlendMode() != LBlendMode.MULTIPLY) {
+        clearCanvas(canvas);
+      } else {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+          // Due to the difference between PorterDuffMode.MODULATE (which we use for compatibility
+          // with Android < Q) and BlendMode.MULTIPLY (which is the correct, alpha-blended mode),
+          // we will alpha-blend the contents of this layer on top of a white background before
+          // we multiply it with the opaque substrate below (with canvas.restore()).
+          //
+          // Since white is the identity color for multiplication, this will behave as if we
+          // had correctly performed an alpha-blended multiply (such as BlendMode.MULTIPLY), but
+          // will work pre-Q as well.
+          if (solidWhitePaint == null) {
+            solidWhitePaint = new LPaint();
+            solidWhitePaint.setColor(0xffffffff);
+          }
+          canvas.drawRect(rect.left - 1, rect.top - 1, rect.right + 1, rect.bottom + 1, solidWhitePaint);
+        }
+      }
+
+      if (L.isTraceEnabled()) {
+        L.beginSection("Layer#drawLayer");
+      }
+      drawLayer(canvas, matrix, alpha, shadowToApply);
+      if (L.isTraceEnabled()) {
+        L.endSection("Layer#drawLayer");
+      }
 
       if (hasMasksOnThisLayer()) {
         applyMasks(canvas, matrix);
       }
 
       if (hasMatteOnThisLayer()) {
-        L.beginSection("Layer#drawMatte");
-        L.beginSection("Layer#saveLayer");
+        if (L.isTraceEnabled()) {
+          L.beginSection("Layer#drawMatte");
+          L.beginSection("Layer#saveLayer");
+        }
         Utils.saveLayerCompat(canvas, rect, mattePaint, SAVE_FLAGS);
-        L.endSection("Layer#saveLayer");
+        if (L.isTraceEnabled()) {
+          L.endSection("Layer#saveLayer");
+        }
         clearCanvas(canvas);
         //noinspection ConstantConditions
-        matteLayer.draw(canvas, parentMatrix, alpha);
-        L.beginSection("Layer#restoreLayer");
+        matteLayer.draw(canvas, parentMatrix, parentAlpha, null);
+        if (L.isTraceEnabled()) {
+          L.beginSection("Layer#restoreLayer");
+        }
         canvas.restore();
-        L.endSection("Layer#restoreLayer");
-        L.endSection("Layer#drawMatte");
+        if (L.isTraceEnabled()) {
+          L.endSection("Layer#restoreLayer");
+          L.endSection("Layer#drawMatte");
+        }
       }
 
-      L.beginSection("Layer#restoreLayer");
+      if (L.isTraceEnabled()) {
+        L.beginSection("Layer#restoreLayer");
+      }
       canvas.restore();
-      L.endSection("Layer#restoreLayer");
+      if (L.isTraceEnabled()) {
+        L.endSection("Layer#restoreLayer");
+      }
     }
 
     if (outlineMasksAndMattes && outlineMasksAndMattesPaint != null) {
@@ -344,10 +402,14 @@ public abstract class BaseLayer
   }
 
   private void clearCanvas(Canvas canvas) {
-    L.beginSection("Layer#clearLayer");
+    if (L.isTraceEnabled()) {
+      L.beginSection("Layer#clearLayer");
+    }
     // If we don't pad the clear draw, some phones leave a 1px border of the graphics buffer.
     canvas.drawRect(rect.left - 1, rect.top - 1, rect.right + 1, rect.bottom + 1, clearPaint);
-    L.endSection("Layer#clearLayer");
+    if (L.isTraceEnabled()) {
+      L.endSection("Layer#clearLayer");
+    }
   }
 
   private void intersectBoundsWithMask(RectF rect, Matrix matrix) {
@@ -425,17 +487,21 @@ public abstract class BaseLayer
     }
   }
 
-  abstract void drawLayer(Canvas canvas, Matrix parentMatrix, int parentAlpha);
+  abstract void drawLayer(Canvas canvas, Matrix parentMatrix, int parentAlpha, @Nullable DropShadow shadowToApply);
 
   private void applyMasks(Canvas canvas, Matrix matrix) {
-    L.beginSection("Layer#saveLayer");
+    if (L.isTraceEnabled()) {
+      L.beginSection("Layer#saveLayer");
+    }
     Utils.saveLayerCompat(canvas, rect, dstInPaint, SAVE_FLAGS);
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
       // Pre-Pie, offscreen buffers were opaque which meant that outer border of a mask
       // might get drawn depending on the result of float rounding.
       clearCanvas(canvas);
     }
-    L.endSection("Layer#saveLayer");
+    if (L.isTraceEnabled()) {
+      L.endSection("Layer#saveLayer");
+    }
     for (int i = 0; i < mask.getMasks().size(); i++) {
       Mask mask = this.mask.getMasks().get(i);
       BaseKeyframeAnimation<ShapeData, Path> maskAnimation = this.mask.getMaskAnimations().get(i);
@@ -479,9 +545,13 @@ public abstract class BaseLayer
           break;
       }
     }
-    L.beginSection("Layer#restoreLayer");
+    if (L.isTraceEnabled()) {
+      L.beginSection("Layer#restoreLayer");
+    }
     canvas.restore();
-    L.endSection("Layer#restoreLayer");
+    if (L.isTraceEnabled()) {
+      L.endSection("Layer#restoreLayer");
+    }
   }
 
   private boolean areAllMasksNone() {
@@ -571,21 +641,53 @@ public abstract class BaseLayer
   }
 
   void setProgress(@FloatRange(from = 0f, to = 1f) float progress) {
-    // Time stretch should not be applied to the layer transform.
+    if (L.isTraceEnabled()) {
+      L.beginSection("BaseLayer#setProgress");
+      // Time stretch should not be applied to the layer transform.
+      L.beginSection("BaseLayer#setProgress.transform");
+    }
     transform.setProgress(progress);
+    if (L.isTraceEnabled()) {
+      L.endSection("BaseLayer#setProgress.transform");
+    }
     if (mask != null) {
+      if (L.isTraceEnabled()) {
+        L.beginSection("BaseLayer#setProgress.mask");
+      }
       for (int i = 0; i < mask.getMaskAnimations().size(); i++) {
         mask.getMaskAnimations().get(i).setProgress(progress);
       }
+      if (L.isTraceEnabled()) {
+        L.endSection("BaseLayer#setProgress.mask");
+      }
     }
     if (inOutAnimation != null) {
+      if (L.isTraceEnabled()) {
+        L.beginSection("BaseLayer#setProgress.inout");
+      }
       inOutAnimation.setProgress(progress);
+      if (L.isTraceEnabled()) {
+        L.endSection("BaseLayer#setProgress.inout");
+      }
     }
     if (matteLayer != null) {
+      if (L.isTraceEnabled()) {
+        L.beginSection("BaseLayer#setProgress.matte");
+      }
       matteLayer.setProgress(progress);
+      if (L.isTraceEnabled()) {
+        L.endSection("BaseLayer#setProgress.matte");
+      }
+    }
+    if (L.isTraceEnabled()) {
+      L.beginSection("BaseLayer#setProgress.animations." + animations.size());
     }
     for (int i = 0; i < animations.size(); i++) {
       animations.get(i).setProgress(progress);
+    }
+    if (L.isTraceEnabled()) {
+      L.endSection("BaseLayer#setProgress.animations." + animations.size());
+      L.endSection("BaseLayer#setProgress");
     }
   }
 
@@ -616,6 +718,10 @@ public abstract class BaseLayer
     return layerModel.getBlurEffect();
   }
 
+  public LBlendMode getBlendMode() {
+    return layerModel.getBlendMode();
+  }
+
   public BlurMaskFilter getBlurMaskFilter(float radius) {
     if (blurMaskFilterRadius == radius) {
       return blurMaskFilter;
@@ -644,7 +750,7 @@ public abstract class BaseLayer
         accumulator.add(matteCurrentPartialKeyPath.resolve(matteLayer));
       }
 
-      if (keyPath.propagateToChildren(getName(), depth)) {
+      if (keyPath.matches(matteLayer.getName(), depth) && keyPath.propagateToChildren(getName(), depth)) {
         int newDepth = depth + keyPath.incrementDepthBy(matteLayer.getName(), depth);
         matteLayer.resolveChildKeyPath(keyPath, newDepth, accumulator, matteCurrentPartialKeyPath);
       }

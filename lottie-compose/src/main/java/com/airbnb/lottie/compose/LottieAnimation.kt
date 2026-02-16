@@ -5,7 +5,6 @@ import android.graphics.Typeface
 import androidx.annotation.FloatRange
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -18,13 +17,13 @@ import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.ScaleFactor
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntSize
-import androidx.compose.ui.unit.dp
-import com.airbnb.lottie.FontAssetDelegate
+import com.airbnb.lottie.AsyncUpdates
 import com.airbnb.lottie.LottieComposition
 import com.airbnb.lottie.LottieDrawable
+import com.airbnb.lottie.LottieFeatureFlag
 import com.airbnb.lottie.RenderMode
-import com.airbnb.lottie.utils.Utils
 import kotlin.math.roundToInt
 
 /**
@@ -67,15 +66,24 @@ import kotlin.math.roundToInt
  *                  size than this composable.
  * @param contentScale Define how the animation should be scaled if it has a different size than this Composable.
  * @param clipToCompositionBounds Determines whether or not Lottie will clip the animation to the original animation composition bounds.
+ *                                The composition bounds refers to the Lottie animation composition, not the Compose composition.
+ * @param clipTextToBoundingBox When true, if there is a bounding box set on a text layer (paragraph text), any text
+ *                              that overflows past its height will not be drawn.
  * @param fontMap A map of keys to Typefaces. The key can be: "fName", "fFamily", or "fFamily-fStyle" as specified in your Lottie file.
+ * @param asyncUpdates When set to true, some parts of animation updates will be done off of the main thread.
+ *                     For more details, refer to the docs of [AsyncUpdates].
+ * @param safeMode If set to true, draw will be wrapped with a try/catch which will cause Lottie to
+ *                     render an empty frame rather than crash your app.
  */
 @Composable
+@JvmOverloads
 fun LottieAnimation(
     composition: LottieComposition?,
     progress: () -> Float,
     modifier: Modifier = Modifier,
     outlineMasksAndMattes: Boolean = false,
     applyOpacityToLayers: Boolean = false,
+    applyShadowToLayers: Boolean = true,
     enableMergePaths: Boolean = false,
     renderMode: RenderMode = RenderMode.AUTOMATIC,
     maintainOriginalImageBounds: Boolean = false,
@@ -83,21 +91,25 @@ fun LottieAnimation(
     alignment: Alignment = Alignment.Center,
     contentScale: ContentScale = ContentScale.Fit,
     clipToCompositionBounds: Boolean = true,
+    clipTextToBoundingBox: Boolean = false,
     fontMap: Map<String, Typeface>? = null,
+    asyncUpdates: AsyncUpdates = AsyncUpdates.AUTOMATIC,
+    safeMode: Boolean = false,
 ) {
     val drawable = remember { LottieDrawable() }
     val matrix = remember { Matrix() }
-    var setDynamicProperties: LottieDynamicProperties? by remember { mutableStateOf(null) }
+    var setDynamicProperties: LottieDynamicProperties? by remember(composition) { mutableStateOf(null) }
 
     if (composition == null || composition.duration == 0f) return Box(modifier)
 
-    val dpScale = Utils.dpScale()
+    val bounds = composition.bounds
+    val context = LocalContext.current
     Canvas(
         modifier = modifier
-            .size((composition.bounds.width() / dpScale).dp, (composition.bounds.height() / dpScale).dp)
+            .lottieSize(bounds.width(), bounds.height())
     ) {
         drawIntoCanvas { canvas ->
-            val compositionSize = Size(composition.bounds.width().toFloat(), composition.bounds.height().toFloat())
+            val compositionSize = Size(bounds.width().toFloat(), bounds.height().toFloat())
             val intSize = IntSize(size.width.roundToInt(), size.height.roundToInt())
 
             val scale = contentScale.computeScaleFactor(compositionSize, size)
@@ -106,8 +118,10 @@ fun LottieAnimation(
             matrix.preTranslate(translation.x.toFloat(), translation.y.toFloat())
             matrix.preScale(scale.scaleX, scale.scaleY)
 
-            drawable.enableMergePathsForKitKatAndAbove(enableMergePaths)
+            drawable.enableFeatureFlag(LottieFeatureFlag.MergePathsApi19, enableMergePaths)
+            drawable.setSafeMode(safeMode)
             drawable.renderMode = renderMode
+            drawable.asyncUpdates = asyncUpdates
             drawable.composition = composition
             drawable.setFontMap(fontMap)
             if (dynamicProperties !== setDynamicProperties) {
@@ -117,10 +131,17 @@ fun LottieAnimation(
             }
             drawable.setOutlineMasksAndMattes(outlineMasksAndMattes)
             drawable.isApplyingOpacityToLayersEnabled = applyOpacityToLayers
+            drawable.isApplyingShadowToLayersEnabled = applyShadowToLayers
             drawable.maintainOriginalImageBounds = maintainOriginalImageBounds
             drawable.clipToCompositionBounds = clipToCompositionBounds
-            drawable.progress = progress()
-            drawable.setBounds(0, 0, composition.bounds.width(), composition.bounds.height())
+            drawable.clipTextToBoundingBox = clipTextToBoundingBox
+            val markerForAnimationsDisabled = drawable.markerForAnimationsDisabled
+            if (!drawable.animationsEnabled(context) && markerForAnimationsDisabled != null) {
+                drawable.progress = markerForAnimationsDisabled.startFrame
+            } else {
+                drawable.progress = progress()
+            }
+            drawable.setBounds(0, 0, bounds.width(), bounds.height())
             drawable.draw(canvas.nativeCanvas, matrix)
         }
     }
@@ -139,6 +160,7 @@ fun LottieAnimation(
     modifier: Modifier = Modifier,
     outlineMasksAndMattes: Boolean = false,
     applyOpacityToLayers: Boolean = false,
+    applyShadowToLayers: Boolean = true,
     enableMergePaths: Boolean = false,
     renderMode: RenderMode = RenderMode.AUTOMATIC,
     maintainOriginalImageBounds: Boolean = false,
@@ -146,20 +168,25 @@ fun LottieAnimation(
     alignment: Alignment = Alignment.Center,
     contentScale: ContentScale = ContentScale.Fit,
     clipToCompositionBounds: Boolean = true,
+    safeMode: Boolean = false,
+    asyncUpdates: AsyncUpdates = AsyncUpdates.AUTOMATIC,
 ) {
     LottieAnimation(
-        composition,
-        { progress },
-        modifier,
-        outlineMasksAndMattes,
-        applyOpacityToLayers,
-        enableMergePaths,
-        renderMode,
-        maintainOriginalImageBounds,
-        dynamicProperties,
-        alignment,
-        contentScale,
-        clipToCompositionBounds,
+        composition = composition,
+        progress = { progress },
+        modifier = modifier,
+        outlineMasksAndMattes = outlineMasksAndMattes,
+        applyOpacityToLayers = applyOpacityToLayers,
+        applyShadowToLayers = applyShadowToLayers,
+        enableMergePaths = enableMergePaths,
+        renderMode = renderMode,
+        maintainOriginalImageBounds = maintainOriginalImageBounds,
+        dynamicProperties = dynamicProperties,
+        alignment = alignment,
+        contentScale = contentScale,
+        clipToCompositionBounds = clipToCompositionBounds,
+        asyncUpdates = asyncUpdates,
+        safeMode = safeMode
     )
 }
 
@@ -171,6 +198,7 @@ fun LottieAnimation(
  * @see animateLottieCompositionAsState
  */
 @Composable
+@JvmOverloads
 fun LottieAnimation(
     composition: LottieComposition?,
     modifier: Modifier = Modifier,
@@ -181,6 +209,7 @@ fun LottieAnimation(
     iterations: Int = 1,
     outlineMasksAndMattes: Boolean = false,
     applyOpacityToLayers: Boolean = false,
+    applyShadowToLayers: Boolean = true,
     enableMergePaths: Boolean = false,
     renderMode: RenderMode = RenderMode.AUTOMATIC,
     reverseOnRepeat: Boolean = false,
@@ -189,7 +218,10 @@ fun LottieAnimation(
     alignment: Alignment = Alignment.Center,
     contentScale: ContentScale = ContentScale.Fit,
     clipToCompositionBounds: Boolean = true,
+    clipTextToBoundingBox: Boolean = false,
     fontMap: Map<String, Typeface>? = null,
+    safeMode: Boolean = false,
+    asyncUpdates: AsyncUpdates = AsyncUpdates.AUTOMATIC,
 ) {
     val progress by animateLottieCompositionAsState(
         composition,
@@ -206,6 +238,7 @@ fun LottieAnimation(
         modifier = modifier,
         outlineMasksAndMattes = outlineMasksAndMattes,
         applyOpacityToLayers = applyOpacityToLayers,
+        applyShadowToLayers = applyShadowToLayers,
         enableMergePaths = enableMergePaths,
         renderMode = renderMode,
         maintainOriginalImageBounds = maintainOriginalImageBounds,
@@ -213,7 +246,59 @@ fun LottieAnimation(
         alignment = alignment,
         contentScale = contentScale,
         clipToCompositionBounds = clipToCompositionBounds,
+        clipTextToBoundingBox = clipTextToBoundingBox,
         fontMap = fontMap,
+        asyncUpdates = asyncUpdates,
+        safeMode = safeMode
+    )
+}
+
+/**
+ * This is a fallback method for binary compatibility with < 6.6.0 releases.
+ *
+ * @see LottieAnimation
+ */
+@Composable
+@Deprecated(
+    "This is here for binary compatibility. It'll be removed after the next major release",
+    level = DeprecationLevel.HIDDEN
+)
+fun LottieAnimation(
+    composition: LottieComposition?,
+    progress: () -> Float,
+    modifier: Modifier = Modifier,
+    outlineMasksAndMattes: Boolean = false,
+    applyOpacityToLayers: Boolean = false,
+    enableMergePaths: Boolean = false,
+    renderMode: RenderMode = RenderMode.AUTOMATIC,
+    maintainOriginalImageBounds: Boolean = false,
+    dynamicProperties: LottieDynamicProperties? = null,
+    alignment: Alignment = Alignment.Center,
+    contentScale: ContentScale = ContentScale.Fit,
+    clipToCompositionBounds: Boolean = true,
+    clipTextToBoundingBox: Boolean = false,
+    fontMap: Map<String, Typeface>? = null,
+    asyncUpdates: AsyncUpdates = AsyncUpdates.AUTOMATIC,
+    safeMode: Boolean = false,
+) {
+    LottieAnimation(
+        composition = composition,
+        progress = progress,
+        modifier = modifier,
+        outlineMasksAndMattes = outlineMasksAndMattes,
+        applyOpacityToLayers = applyOpacityToLayers,
+        applyShadowToLayers = false,
+        enableMergePaths = enableMergePaths,
+        renderMode = renderMode,
+        maintainOriginalImageBounds = maintainOriginalImageBounds,
+        dynamicProperties = dynamicProperties,
+        alignment = alignment,
+        contentScale = contentScale,
+        clipToCompositionBounds = clipToCompositionBounds,
+        clipTextToBoundingBox = clipTextToBoundingBox,
+        fontMap = fontMap,
+        asyncUpdates = asyncUpdates,
+        safeMode = safeMode,
     )
 }
 

@@ -19,6 +19,7 @@ import com.airbnb.lottie.model.content.GradientColor;
 import com.airbnb.lottie.model.content.GradientStroke;
 import com.airbnb.lottie.model.content.GradientType;
 import com.airbnb.lottie.model.layer.BaseLayer;
+import com.airbnb.lottie.utils.DropShadow;
 import com.airbnb.lottie.value.LottieValueCallback;
 
 public class GradientStrokeContent extends BaseStrokeContent {
@@ -64,7 +65,7 @@ public class GradientStrokeContent extends BaseStrokeContent {
     layer.addAnimation(endPointAnimation);
   }
 
-  @Override public void draw(Canvas canvas, Matrix parentMatrix, int parentAlpha) {
+  @Override public void draw(Canvas canvas, Matrix parentMatrix, int parentAlpha, DropShadow shadowToApply) {
     if (hidden) {
       return;
     }
@@ -76,10 +77,9 @@ public class GradientStrokeContent extends BaseStrokeContent {
     } else {
       shader = getRadialGradient();
     }
-    shader.setLocalMatrix(parentMatrix);
     paint.setShader(shader);
 
-    super.draw(canvas, parentMatrix, parentAlpha);
+    super.draw(canvas, parentMatrix, parentAlpha, shadowToApply);
   }
 
   @Override public String getName() {

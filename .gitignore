@@ -5,11 +5,14 @@
 
 # From https://github.com/github/gitignore/blob/master/Global/JetBrains.gitignore
 # User-specific stuff
+.idea/kotlinc.xml
 .idea/**/workspace.xml
 .idea/**/tasks.xml
 .idea/**/usage.statistics.xml
 .idea/**/dictionaries
 .idea/**/shelf
+.idea/runConfigurations.xml
+.idea/caches
 
 # Generated files
 .idea/**/contentModel.xml
@@ -31,6 +34,9 @@
 .idea/codeStyleSettings.xml
 .idea/compiler.xml
 .idea/androidTestResultsUserPreferences.xml
+.idea/appInsightsSettings.xml
+.idea/migrations.xml
+.idea/deploymentTargetSelector.xml
 
 # Gradle
 .idea/**/gradle.xml
@@ -44,3 +50,4 @@ build
 *auto-save*
 credentials/*
 secring.gpg
+snapshot-env

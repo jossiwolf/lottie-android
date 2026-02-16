@@ -2,7 +2,6 @@ package com.airbnb.lottie.model.layer;
 
 import android.graphics.Canvas;
 import android.graphics.Matrix;
-import android.graphics.Paint;
 import android.graphics.RectF;
 
 import androidx.annotation.FloatRange;
@@ -14,10 +13,12 @@ import com.airbnb.lottie.LottieComposition;
 import com.airbnb.lottie.LottieDrawable;
 import com.airbnb.lottie.LottieProperty;
 import com.airbnb.lottie.animation.keyframe.BaseKeyframeAnimation;
+import com.airbnb.lottie.animation.keyframe.DropShadowKeyframeAnimation;
 import com.airbnb.lottie.animation.keyframe.ValueCallbackKeyframeAnimation;
 import com.airbnb.lottie.model.KeyPath;
 import com.airbnb.lottie.model.animatable.AnimatableFloatValue;
-import com.airbnb.lottie.utils.Utils;
+import com.airbnb.lottie.utils.DropShadow;
+import com.airbnb.lottie.utils.OffscreenLayer;
 import com.airbnb.lottie.value.LottieValueCallback;
 
 import java.util.ArrayList;
@@ -28,12 +29,17 @@ public class CompositionLayer extends BaseLayer {
   private final List<BaseLayer> layers = new ArrayList<>();
   private final RectF rect = new RectF();
   private final RectF newClipRect = new RectF();
-  private final Paint layerPaint = new Paint();
+  private final RectF layerBounds = new RectF();
+  private final OffscreenLayer offscreenLayer = new OffscreenLayer();
+  private final OffscreenLayer.ComposeOp offscreenOp = new OffscreenLayer.ComposeOp();
 
   @Nullable private Boolean hasMatte;
   @Nullable private Boolean hasMasks;
+  private float progress;
 
   private boolean clipToCompositionBounds = true;
+
+  @Nullable private DropShadowKeyframeAnimation dropShadowAnimation;
 
   public CompositionLayer(LottieDrawable lottieDrawable, Layer layerModel, List<Layer> layerModels,
       LottieComposition composition) {
@@ -88,6 +94,10 @@ public class CompositionLayer extends BaseLayer {
         layerView.setParentLayer(parentLayer);
       }
     }
+
+    if (getDropShadowEffect() != null) {
+      dropShadowAnimation = new DropShadowKeyframeAnimation(this, this, getDropShadowEffect());
+    }
   }
 
   public void setClipToCompositionBounds(boolean clipToCompositionBounds) {
@@ -101,35 +111,65 @@ public class CompositionLayer extends BaseLayer {
     }
   }
 
-  @Override void drawLayer(Canvas canvas, Matrix parentMatrix, int parentAlpha) {
-    L.beginSection("CompositionLayer#draw");
-    newClipRect.set(0, 0, layerModel.getPreCompWidth(), layerModel.getPreCompHeight());
-    parentMatrix.mapRect(newClipRect);
-
+  @Override void drawLayer(Canvas canvas, Matrix parentMatrix, int parentAlpha, @Nullable DropShadow parentShadowToApply) {
+    if (L.isTraceEnabled()) {
+      L.beginSection("CompositionLayer#draw");
+    }
     // Apply off-screen rendering only when needed in order to improve rendering performance.
-    boolean isDrawingWithOffScreen = lottieDrawable.isApplyingOpacityToLayersEnabled() && layers.size() > 1 && parentAlpha != 255;
-    if (isDrawingWithOffScreen) {
-      layerPaint.setAlpha(parentAlpha);
-      Utils.saveLayerCompat(canvas, newClipRect, layerPaint);
+    boolean hasShadow = parentShadowToApply != null || dropShadowAnimation != null;
+    boolean isDrawingWithOffScreen =
+        (lottieDrawable.isApplyingOpacityToLayersEnabled() && layers.size() > 1 && parentAlpha != 255) ||
+            (hasShadow && lottieDrawable.isApplyingShadowToLayersEnabled());
+    int childAlpha = isDrawingWithOffScreen ? 255 : parentAlpha;
+
+    // If we've reached this path with a parentShadowToApply, prioritize the one on our own layer, since we can only support one shadow
+    // at a time for primitive shapes. If applyShadowsToLayers was true, this would never happen, since it forces the next
+    // parentShadowToApply to be null (see below).
+    DropShadow shadowToApply = dropShadowAnimation != null
+        ? dropShadowAnimation.evaluate(parentMatrix, childAlpha)
+        : parentShadowToApply;
+
+    // Only clip precomps. This mimics the way After Effects renders animations.
+    boolean ignoreClipOnThisLayer = !clipToCompositionBounds && "__container".equals(layerModel.getName());
+    if (!ignoreClipOnThisLayer) {
+      newClipRect.set(0, 0, layerModel.getPreCompWidth(), layerModel.getPreCompHeight());
+      parentMatrix.mapRect(newClipRect);
     } else {
-      canvas.save();
+      // Calculate the union of all children layer bounds
+      newClipRect.setEmpty();
+      for (BaseLayer layer : layers) {
+        layer.getBounds(layerBounds, parentMatrix, true);
+        newClipRect.union(layerBounds);
+      }
     }
 
-    int childAlpha = isDrawingWithOffScreen ? 255 : parentAlpha;
-    for (int i = layers.size() - 1; i >= 0; i--) {
-      boolean nonEmptyClip = true;
-      // Only clip precomps. This mimics the way After Effects renders animations.
-      boolean ignoreClipOnThisLayer = !clipToCompositionBounds && "__container".equals(layerModel.getName());
-      if (!ignoreClipOnThisLayer && !newClipRect.isEmpty()) {
-        nonEmptyClip = canvas.clipRect(newClipRect);
+    Canvas targetCanvas = canvas;
+    if (isDrawingWithOffScreen) {
+      offscreenOp.reset();
+      offscreenOp.alpha = parentAlpha;
+      if (shadowToApply != null) {
+        shadowToApply.applyTo(offscreenOp);
+        shadowToApply = null; // OffscreenLayer takes care of shadows when we use it
       }
-      if (nonEmptyClip) {
+      targetCanvas = offscreenLayer.start(canvas, newClipRect, offscreenOp);
+    }
+
+    canvas.save();
+    if (canvas.clipRect(newClipRect)) {
+      for (int i = layers.size() - 1; i >= 0; i--) {
         BaseLayer layer = layers.get(i);
-        layer.draw(canvas, parentMatrix, childAlpha);
+        layer.draw(targetCanvas, parentMatrix, childAlpha, shadowToApply);
       }
+    }
+
+    if (isDrawingWithOffScreen) {
+      offscreenLayer.finish();
     }
     canvas.restore();
-    L.endSection("CompositionLayer#draw");
+
+    if (L.isTraceEnabled()) {
+      L.endSection("CompositionLayer#draw");
+    }
   }
 
   @Override public void getBounds(RectF outBounds, Matrix parentMatrix, boolean applyParents) {
@@ -142,6 +182,10 @@ public class CompositionLayer extends BaseLayer {
   }
 
   @Override public void setProgress(@FloatRange(from = 0f, to = 1f) float progress) {
+    if (L.isTraceEnabled()) {
+      L.beginSection("CompositionLayer#setProgress");
+    }
+    this.progress = progress;
     super.setProgress(progress);
     if (timeRemapping != null) {
       // The duration has 0.01 frame offset to show end of animation properly.
@@ -162,6 +206,13 @@ public class CompositionLayer extends BaseLayer {
     for (int i = layers.size() - 1; i >= 0; i--) {
       layers.get(i).setProgress(progress);
     }
+    if (L.isTraceEnabled()) {
+      L.endSection("CompositionLayer#setProgress");
+    }
+  }
+
+  public float getProgress() {
+    return progress;
   }
 
   public boolean hasMasks() {
@@ -224,6 +275,16 @@ public class CompositionLayer extends BaseLayer {
         timeRemapping.addUpdateListener(this);
         addAnimation(timeRemapping);
       }
+    } else if (property == LottieProperty.DROP_SHADOW_COLOR && dropShadowAnimation != null) {
+      dropShadowAnimation.setColorCallback((LottieValueCallback<Integer>) callback);
+    } else if (property == LottieProperty.DROP_SHADOW_OPACITY && dropShadowAnimation != null) {
+      dropShadowAnimation.setOpacityCallback((LottieValueCallback<Float>) callback);
+    } else if (property == LottieProperty.DROP_SHADOW_DIRECTION && dropShadowAnimation != null) {
+      dropShadowAnimation.setDirectionCallback((LottieValueCallback<Float>) callback);
+    } else if (property == LottieProperty.DROP_SHADOW_DISTANCE && dropShadowAnimation != null) {
+      dropShadowAnimation.setDistanceCallback((LottieValueCallback<Float>) callback);
+    } else if (property == LottieProperty.DROP_SHADOW_RADIUS && dropShadowAnimation != null) {
+      dropShadowAnimation.setRadiusCallback((LottieValueCallback<Float>) callback);
     }
   }
 }

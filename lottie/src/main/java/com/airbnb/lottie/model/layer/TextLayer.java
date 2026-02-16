@@ -25,9 +25,12 @@ import com.airbnb.lottie.model.Font;
 import com.airbnb.lottie.model.FontCharacter;
 import com.airbnb.lottie.model.animatable.AnimatableTextProperties;
 import com.airbnb.lottie.model.content.ShapeGroup;
+import com.airbnb.lottie.model.content.TextRangeUnits;
+import com.airbnb.lottie.utils.DropShadow;
 import com.airbnb.lottie.utils.Utils;
 import com.airbnb.lottie.value.LottieValueCallback;
 
+import java.text.Bidi;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -35,9 +38,13 @@ import java.util.List;
 import java.util.Map;
 
 public class TextLayer extends BaseLayer {
+
   // Capacity is 2 because emojis are 2 characters. Some are longer in which case, the capacity will
   // be expanded but that should be pretty rare.
   private final StringBuilder stringBuilder = new StringBuilder(2);
+  private final StringBuilder charStringBuilder = new StringBuilder(0);
+  private final StringBuilder reorderingStringBuilder = new StringBuilder(0);
+  private final StringBuilder reversingStringBuilder = new StringBuilder(0);
   private final RectF rectF = new RectF();
   private final Matrix matrix = new Matrix();
   private final Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG) {{
@@ -48,6 +55,7 @@ public class TextLayer extends BaseLayer {
   }};
   private final Map<FontCharacter, List<ContentGroup>> contentsForCharacter = new HashMap<>();
   private final LongSparseArray<String> codePointCache = new LongSparseArray<>();
+  private final List<String> charStrings = new ArrayList<>();
   /**
    * If this is paragraph text, one line may wrap depending on the size of the document data box.
    */
@@ -55,6 +63,7 @@ public class TextLayer extends BaseLayer {
   private final TextKeyframeAnimation textAnimation;
   private final LottieDrawable lottieDrawable;
   private final LottieComposition composition;
+  private TextRangeUnits textRangeUnits = TextRangeUnits.INDEX;
   @Nullable
   private BaseKeyframeAnimation<Integer, Integer> colorAnimation;
   @Nullable
@@ -72,9 +81,17 @@ public class TextLayer extends BaseLayer {
   @Nullable
   private BaseKeyframeAnimation<Float, Float> trackingCallbackAnimation;
   @Nullable
+  private BaseKeyframeAnimation<Integer, Integer> opacityAnimation;
+  @Nullable
   private BaseKeyframeAnimation<Float, Float> textSizeCallbackAnimation;
   @Nullable
   private BaseKeyframeAnimation<Typeface, Typeface> typefaceCallbackAnimation;
+  @Nullable
+  private BaseKeyframeAnimation<Integer, Integer> textRangeStartAnimation;
+  @Nullable
+  private BaseKeyframeAnimation<Integer, Integer> textRangeEndAnimation;
+  @Nullable
+  private BaseKeyframeAnimation<Integer, Integer> textRangeOffsetAnimation;
 
   TextLayer(LottieDrawable lottieDrawable, Layer layerModel) {
     super(lottieDrawable, layerModel);
@@ -86,28 +103,56 @@ public class TextLayer extends BaseLayer {
     addAnimation(textAnimation);
 
     AnimatableTextProperties textProperties = layerModel.getTextProperties();
-    if (textProperties != null && textProperties.color != null) {
-      colorAnimation = textProperties.color.createAnimation();
+    if (textProperties != null && textProperties.textStyle != null && textProperties.textStyle.color != null) {
+      colorAnimation = textProperties.textStyle.color.createAnimation();
       colorAnimation.addUpdateListener(this);
       addAnimation(colorAnimation);
     }
 
-    if (textProperties != null && textProperties.stroke != null) {
-      strokeColorAnimation = textProperties.stroke.createAnimation();
+    if (textProperties != null && textProperties.textStyle != null && textProperties.textStyle.stroke != null) {
+      strokeColorAnimation = textProperties.textStyle.stroke.createAnimation();
       strokeColorAnimation.addUpdateListener(this);
       addAnimation(strokeColorAnimation);
     }
 
-    if (textProperties != null && textProperties.strokeWidth != null) {
-      strokeWidthAnimation = textProperties.strokeWidth.createAnimation();
+    if (textProperties != null && textProperties.textStyle != null && textProperties.textStyle.strokeWidth != null) {
+      strokeWidthAnimation = textProperties.textStyle.strokeWidth.createAnimation();
       strokeWidthAnimation.addUpdateListener(this);
       addAnimation(strokeWidthAnimation);
     }
 
-    if (textProperties != null && textProperties.tracking != null) {
-      trackingAnimation = textProperties.tracking.createAnimation();
+    if (textProperties != null && textProperties.textStyle != null && textProperties.textStyle.tracking != null) {
+      trackingAnimation = textProperties.textStyle.tracking.createAnimation();
       trackingAnimation.addUpdateListener(this);
       addAnimation(trackingAnimation);
+    }
+
+    if (textProperties != null && textProperties.textStyle != null && textProperties.textStyle.opacity != null) {
+      opacityAnimation = textProperties.textStyle.opacity.createAnimation();
+      opacityAnimation.addUpdateListener(this);
+      addAnimation(opacityAnimation);
+    }
+
+    if (textProperties != null && textProperties.rangeSelector != null && textProperties.rangeSelector.start != null) {
+      textRangeStartAnimation = textProperties.rangeSelector.start.createAnimation();
+      textRangeStartAnimation.addUpdateListener(this);
+      addAnimation(textRangeStartAnimation);
+    }
+
+    if (textProperties != null && textProperties.rangeSelector != null && textProperties.rangeSelector.end != null) {
+      textRangeEndAnimation = textProperties.rangeSelector.end.createAnimation();
+      textRangeEndAnimation.addUpdateListener(this);
+      addAnimation(textRangeEndAnimation);
+    }
+
+    if (textProperties != null && textProperties.rangeSelector != null && textProperties.rangeSelector.offset != null) {
+      textRangeOffsetAnimation = textProperties.rangeSelector.offset.createAnimation();
+      textRangeOffsetAnimation.addUpdateListener(this);
+      addAnimation(textRangeOffsetAnimation);
+    }
+
+    if (textProperties != null && textProperties.rangeSelector != null) {
+      textRangeUnits = textProperties.rangeSelector.units;
     }
   }
 
@@ -119,7 +164,7 @@ public class TextLayer extends BaseLayer {
   }
 
   @Override
-  void drawLayer(Canvas canvas, Matrix parentMatrix, int parentAlpha) {
+  void drawLayer(Canvas canvas, Matrix parentMatrix, int parentAlpha, @Nullable DropShadow shadowToApply /* ignored for now */) {
     DocumentData documentData = textAnimation.getValue();
     Font font = composition.getFonts().get(documentData.fontName);
     if (font == null) {
@@ -128,49 +173,86 @@ public class TextLayer extends BaseLayer {
     canvas.save();
     canvas.concat(parentMatrix);
 
-    configurePaint(documentData, parentMatrix);
+    configurePaint(documentData, parentAlpha, 0);
 
     if (lottieDrawable.useTextGlyphs()) {
-      drawTextWithGlyphs(documentData, parentMatrix, font, canvas);
+      drawTextWithGlyphs(documentData, parentMatrix, font, canvas, parentAlpha);
     } else {
-      drawTextWithFont(documentData, font, canvas);
+      drawTextWithFont(documentData, font, canvas, parentAlpha);
     }
 
     canvas.restore();
   }
 
-  private void configurePaint(DocumentData documentData, Matrix parentMatrix) {
-    if (colorCallbackAnimation != null) {
+  /**
+   * Configures the [fillPaint] and [strokePaint] used for drawing based on currently active text ranges.
+   *
+   * @param parentAlpha A value from 0 to 255 indicating the alpha of the parented layer.
+   */
+  private void configurePaint(DocumentData documentData, int parentAlpha, int indexInDocument) {
+    if (colorCallbackAnimation != null) { // dynamic property takes priority
       fillPaint.setColor(colorCallbackAnimation.getValue());
-    } else if (colorAnimation != null) {
+    } else if (colorAnimation != null && isIndexInRangeSelection(indexInDocument)) {
       fillPaint.setColor(colorAnimation.getValue());
-    } else {
+    } else { // fall back to the document color
       fillPaint.setColor(documentData.color);
     }
 
     if (strokeColorCallbackAnimation != null) {
       strokePaint.setColor(strokeColorCallbackAnimation.getValue());
-    } else if (strokeColorAnimation != null) {
+    } else if (strokeColorAnimation != null && isIndexInRangeSelection(indexInDocument)) {
       strokePaint.setColor(strokeColorAnimation.getValue());
     } else {
       strokePaint.setColor(documentData.strokeColor);
     }
-    int opacity = transform.getOpacity() == null ? 100 : transform.getOpacity().getValue();
-    int alpha = opacity * 255 / 100;
+
+    // These opacity values are in the range 0 to 100
+    int transformOpacity = transform.getOpacity() == null ? 100 : transform.getOpacity().getValue();
+    int textRangeOpacity = opacityAnimation != null && isIndexInRangeSelection(indexInDocument) ? opacityAnimation.getValue() : 100;
+
+    // This alpha value needs to be in the range 0 to 255 to be applied to the Paint instances.
+    // We map the layer transform's opacity into that range and multiply it by the fractional opacity of the text range and the parent.
+    int alpha = Math.round((transformOpacity * 255f / 100f)
+        * (textRangeOpacity / 100f)
+        * parentAlpha / 255f);
     fillPaint.setAlpha(alpha);
     strokePaint.setAlpha(alpha);
 
     if (strokeWidthCallbackAnimation != null) {
       strokePaint.setStrokeWidth(strokeWidthCallbackAnimation.getValue());
-    } else if (strokeWidthAnimation != null) {
+    } else if (strokeWidthAnimation != null && isIndexInRangeSelection(indexInDocument)) {
       strokePaint.setStrokeWidth(strokeWidthAnimation.getValue());
     } else {
       strokePaint.setStrokeWidth(documentData.strokeWidth * Utils.dpScale());
     }
   }
 
+  private boolean isIndexInRangeSelection(int indexInDocument) {
+    int textLength = textAnimation.getValue().text.length();
+    if (textRangeStartAnimation != null && textRangeEndAnimation != null) {
+      // After effects supports reversed text ranges where the start index is greater than the end index.
+      // For the purposes of determining if the given index is inside of the range, we take the start as the smaller value.
+      int rangeStart = Math.min(textRangeStartAnimation.getValue(), textRangeEndAnimation.getValue());
+      int rangeEnd = Math.max(textRangeStartAnimation.getValue(), textRangeEndAnimation.getValue());
+
+      if (textRangeOffsetAnimation != null) {
+        int offset = textRangeOffsetAnimation.getValue();
+        rangeStart += offset;
+        rangeEnd += offset;
+      }
+
+      if (textRangeUnits == TextRangeUnits.INDEX) {
+        return indexInDocument >= rangeStart && indexInDocument < rangeEnd;
+      } else {
+        float currentIndexAsPercent = indexInDocument / (float) textLength * 100;
+        return currentIndexAsPercent >= rangeStart && currentIndexAsPercent < rangeEnd;
+      }
+    }
+    return true;
+  }
+
   private void drawTextWithGlyphs(
-      DocumentData documentData, Matrix parentMatrix, Font font, Canvas canvas) {
+      DocumentData documentData, Matrix parentMatrix, Font font, Canvas canvas, int parentAlpha) {
     float textSize;
     if (textSizeCallbackAnimation != null) {
       textSize = textSizeCallbackAnimation.getValue();
@@ -203,8 +285,9 @@ public class TextLayer extends BaseLayer {
 
         canvas.save();
 
-        offsetCanvas(canvas, documentData, lineIndex, line.width);
-        drawGlyphTextLine(line.text, documentData, font, canvas, parentScale, fontScale, tracking);
+        if (offsetCanvas(canvas, documentData, lineIndex, line.width)) {
+          drawGlyphTextLine(line.text, documentData, font, canvas, parentScale, fontScale, tracking, parentAlpha);
+        }
 
         canvas.restore();
       }
@@ -212,7 +295,7 @@ public class TextLayer extends BaseLayer {
   }
 
   private void drawGlyphTextLine(String text, DocumentData documentData,
-      Font font, Canvas canvas, float parentScale, float fontScale, float tracking) {
+      Font font, Canvas canvas, float parentScale, float fontScale, float tracking, int parentAlpha) {
     for (int i = 0; i < text.length(); i++) {
       char c = text.charAt(i);
       int characterHash = FontCharacter.hashFor(c, font.getFamily(), font.getStyle());
@@ -221,13 +304,13 @@ public class TextLayer extends BaseLayer {
         // Something is wrong. Potentially, they didn't export the text as a glyph.
         continue;
       }
-      drawCharacterAsGlyph(character, fontScale, documentData, canvas);
+      drawCharacterAsGlyph(character, fontScale, documentData, canvas, i, parentAlpha);
       float tx = (float) character.getWidth() * fontScale * Utils.dpScale() + tracking;
       canvas.translate(tx, 0);
     }
   }
 
-  private void drawTextWithFont(DocumentData documentData, Font font, Canvas canvas) {
+  private void drawTextWithFont(DocumentData documentData, Font font, Canvas canvas, int parentAlpha) {
     Typeface typeface = getTypeface(font);
     if (typeface == null) {
       return;
@@ -261,6 +344,7 @@ public class TextLayer extends BaseLayer {
     List<String> textLines = getTextLines(text);
     int textLineCount = textLines.size();
     int lineIndex = -1;
+    int characterIndexAtStartOfLine = 0;
     for (int i = 0; i < textLineCount; i++) {
       String textLine = textLines.get(i);
       float boxWidth = documentData.boxSize == null ? 0f : documentData.boxSize.x;
@@ -271,18 +355,36 @@ public class TextLayer extends BaseLayer {
 
         canvas.save();
 
-        offsetCanvas(canvas, documentData, lineIndex, line.width);
-        drawFontTextLine(line.text, documentData, canvas, tracking);
+        float lineWidth =
+            (textAnimation == null &&
+                textSizeCallbackAnimation == null &&
+                trackingCallbackAnimation == null) ?
+                line.width :
+                fillPaint.measureText(line.text);
+        if (offsetCanvas(canvas, documentData, lineIndex, lineWidth)) {
+          String currentLineText = line.text;
+          if (Bidi.requiresBidi(currentLineText.toCharArray(), 0, currentLineText.length())) {
+            currentLineText = reorderLineVisually(currentLineText);
+          }
+          drawFontTextLine(currentLineText, documentData, canvas, tracking, characterIndexAtStartOfLine, parentAlpha);
+        }
+
+        characterIndexAtStartOfLine += line.text.length();
 
         canvas.restore();
       }
     }
   }
 
-  private void offsetCanvas(Canvas canvas, DocumentData documentData, int lineIndex, float lineWidth) {
+  private boolean offsetCanvas(Canvas canvas, DocumentData documentData, int lineIndex, float lineWidth) {
     PointF position = documentData.boxPosition;
     PointF size = documentData.boxSize;
-    float lineOffset = lineIndex * documentData.lineHeight * Utils.dpScale();
+    float dpScale = Utils.dpScale();
+    float lineStartY = position == null ? 0f : documentData.lineHeight * dpScale + position.y;
+    float lineOffset = (lineIndex * documentData.lineHeight * dpScale) + lineStartY;
+    if (lottieDrawable.getClipTextToBoundingBox() && size != null && position != null && lineOffset >= position.y + size.y + documentData.size) {
+      return false;
+    }
     float lineStart = position == null ? 0f : position.x;
     float boxWidth = size == null ? 0f : size.x;
     switch (documentData.justification) {
@@ -296,6 +398,7 @@ public class TextLayer extends BaseLayer {
         canvas.translate(lineStart + boxWidth / 2f - lineWidth / 2f, lineOffset);
         break;
     }
+    return true;
   }
 
   @Nullable
@@ -322,18 +425,94 @@ public class TextLayer extends BaseLayer {
     return Arrays.asList(textLinesArray);
   }
 
-  private void drawFontTextLine(String text, DocumentData documentData, Canvas canvas, float tracking) {
+  /**
+   * @param characterIndexAtStartOfLine The index within the overall document of the character at the start of the line
+   * @param parentAlpha
+   */
+  private void drawFontTextLine(String text,
+      DocumentData documentData,
+      Canvas canvas,
+      float tracking,
+      int characterIndexAtStartOfLine,
+      int parentAlpha) {
+    charStrings.clear();
     for (int i = 0; i < text.length(); ) {
       String charString = codePointToString(text, i);
+      charStrings.add(charString);
       i += charString.length();
-      drawCharacterFromFont(charString, documentData, canvas);
+    }
+
+    for (int i = 0; i < charStrings.size(); ) {
+      charStringBuilder.setLength(0);
+      charStringBuilder.append(charStrings.get(i));
+      int nextIndex = i + 1;
+      while (nextIndex < charStrings.size()) {
+        String nextCharString = charStrings.get(nextIndex);
+        if (isJoiningRightToLeft(nextCharString)) {
+          // We insert at the front explicitly, string builder will actually add it to the end visually since it is rtl
+          charStringBuilder.insert(0, nextCharString);
+          nextIndex++;
+        } else {
+          break;
+        }
+      }
+
+      String charString = charStringBuilder.toString();
+      drawCharacterFromFont(charString, documentData, canvas, characterIndexAtStartOfLine + i, parentAlpha);
       float charWidth = fillPaint.measureText(charString);
       float tx = charWidth + tracking;
       canvas.translate(tx, 0);
+
+      i = nextIndex;
     }
   }
 
-  private List<TextSubLine> splitGlyphTextIntoLines(String textLine, float boxWidth, Font font, float fontScale, float tracking, boolean usingGlyphs) {
+  /**
+   * Transform string stored in logical order to visual order.
+   * For example, if an RTL language is stored as qwert in memory, it will become trewq,
+   * so we can keep the logic of drawing each character from left to right afterward.
+   *
+   * @param text the original string
+   * @return the text in visual order, written from left to right
+   */
+  private String reorderLineVisually(String text) {
+    Bidi bidi = new Bidi(text, Bidi.DIRECTION_DEFAULT_LEFT_TO_RIGHT);
+    int runCount = bidi.getRunCount();
+    byte[] runLevels = new byte[runCount];
+    Integer[] runs = new Integer[runCount];
+    for (int i = 0; i < runCount; i++) {
+      runLevels[i] = (byte) bidi.getRunLevel(i);
+      runs[i] = i;
+    }
+    Bidi.reorderVisually(runLevels, 0, runs, 0, runCount);
+
+    reorderingStringBuilder.setLength(0);
+    for (int i = 0; i < runCount; i++) {
+      int originalIndex = runs[i];
+      int runStart = bidi.getRunStart(originalIndex);
+      int runLimit = bidi.getRunLimit(originalIndex);
+      // Even run level means LTR, odd means RTL
+      int runLevel = bidi.getRunLevel(originalIndex);
+
+      String word = text.substring(runStart, runLimit);
+      if ((runLevel & 1) == 0) {
+        reorderingStringBuilder.append(word);
+      } else {
+        reversingStringBuilder.setLength(0);
+        for (int j = 0; j < word.length();) {
+          String charString = codePointToString(word, j);
+          reversingStringBuilder.insert(0, charString);
+          j += charString.length();
+        }
+        reorderingStringBuilder.append(reversingStringBuilder);
+      }
+    }
+
+    return reorderingStringBuilder.toString();
+  }
+
+  private List<TextSubLine> splitGlyphTextIntoLines(String textLine, float boxWidth, Font font, float fontScale, float tracking,
+      boolean usingGlyphs) {
     int lineCount = 0;
 
     float currentLineWidth = 0;
@@ -420,7 +599,10 @@ public class TextLayer extends BaseLayer {
       FontCharacter character,
       float fontScale,
       DocumentData documentData,
-      Canvas canvas) {
+      Canvas canvas,
+      int indexInDocument,
+      int parentAlpha) {
+    configurePaint(documentData, parentAlpha, indexInDocument);
     List<ContentGroup> contentGroups = getContentsForCharacter(character);
     for (int j = 0; j < contentGroups.size(); j++) {
       Path path = contentGroups.get(j).getPath();
@@ -449,7 +631,8 @@ public class TextLayer extends BaseLayer {
     canvas.drawPath(path, paint);
   }
 
-  private void drawCharacterFromFont(String character, DocumentData documentData, Canvas canvas) {
+  private void drawCharacterFromFont(String character, DocumentData documentData, Canvas canvas, int indexInDocument, int parentAlpha) {
+    configurePaint(documentData, parentAlpha, indexInDocument);
     if (documentData.strokeOverFill) {
       drawCharacter(character, fillPaint, canvas);
       drawCharacter(character, strokePaint, canvas);
@@ -521,6 +704,24 @@ public class TextLayer extends BaseLayer {
         Character.getType(codePoint) == Character.OTHER_SYMBOL ||
         Character.getType(codePoint) == Character.DIRECTIONALITY_NONSPACING_MARK ||
         Character.getType(codePoint) == Character.SURROGATE;
+  }
+
+  /**
+   * Whether a character is joining (connecting, such as ت + ت should become تت), and is written from right to left.
+   * This is used for determining if we should render a group of characters together,
+   * and we will pass them to the renderer to pick the correct joining glyph.
+   *
+   * @param stringChar a string that preferably contains only one visual character
+   * @return true if any character in the input is joining, and is written from right to left
+   */
+  private boolean isJoiningRightToLeft(String stringChar) {
+    for (int i = 0; i < stringChar.length(); i++) {
+      int codePoint = stringChar.codePointAt(i);
+      if (Character.getDirectionality(codePoint) == Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC) {
+        return true;
+      }
+    }
+    return false;
   }
 
   @SuppressWarnings("unchecked")
@@ -605,6 +806,7 @@ public class TextLayer extends BaseLayer {
   }
 
   private static class TextSubLine {
+
     private String text = "";
     private float width = 0f;
 

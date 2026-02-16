@@ -14,6 +14,7 @@ import android.graphics.RectF;
 import android.os.Build;
 import android.provider.Settings;
 
+import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.airbnb.lottie.L;
@@ -33,6 +34,8 @@ import javax.net.ssl.SSLException;
 
 public final class Utils {
   public static final int SECOND_IN_NANOS = 1000000000;
+
+  public static final Matrix IDENTITY_MATRIX = new Matrix();
 
   /**
    * Wrap in Local Thread is necessary for prevent race condition in multi-threaded mode
@@ -136,7 +139,9 @@ public final class Utils {
 
   public static void applyTrimPathIfNeeded(
       Path path, float startValue, float endValue, float offsetValue) {
-    L.beginSection("applyTrimPathIfNeeded");
+    if (L.isTraceEnabled()) {
+      L.beginSection("applyTrimPathIfNeeded");
+    }
     final PathMeasure pathMeasure = threadLocalPathMeasure.get();
     final Path tempPath = threadLocalTempPath.get();
     final Path tempPath2 = threadLocalTempPath2.get();
@@ -145,11 +150,15 @@ public final class Utils {
 
     float length = pathMeasure.getLength();
     if (startValue == 1f && endValue == 0f) {
-      L.endSection("applyTrimPathIfNeeded");
+      if (L.isTraceEnabled()) {
+        L.endSection("applyTrimPathIfNeeded");
+      }
       return;
     }
     if (length < 1f || Math.abs(endValue - startValue - 1) < .01) {
-      L.endSection("applyTrimPathIfNeeded");
+      if (L.isTraceEnabled()) {
+        L.endSection("applyTrimPathIfNeeded");
+      }
       return;
     }
     float start = length * startValue;
@@ -177,7 +186,9 @@ public final class Utils {
     // If the start and end are equals, return an empty path.
     if (newStart == newEnd) {
       path.reset();
-      L.endSection("applyTrimPathIfNeeded");
+      if (L.isTraceEnabled()) {
+        L.endSection("applyTrimPathIfNeeded");
+      }
       return;
     }
 
@@ -210,7 +221,9 @@ public final class Utils {
       tempPath.addPath(tempPath2);
     }
     path.set(tempPath);
-    L.endSection("applyTrimPathIfNeeded");
+    if (L.isTraceEnabled()) {
+      L.endSection("applyTrimPathIfNeeded");
+    }
   }
 
   @SuppressWarnings("SameParameterValue")
@@ -252,7 +265,7 @@ public final class Utils {
     return Resources.getSystem().getDisplayMetrics().density;
   }
 
-  public static float getAnimationScale(Context context) {
+  public static float getAnimationScale(@NonNull Context context) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
       return Settings.Global.getFloat(context.getContentResolver(),
           Settings.Global.ANIMATOR_DURATION_SCALE, 1.0f);
@@ -267,7 +280,7 @@ public final class Utils {
    * Resize the bitmap to exactly the same size as the specified dimension, changing the aspect ratio if needed.
    * Returns the original bitmap if the dimensions already match.
    */
-  public static Bitmap resizeBitmapIfNeeded(Bitmap bitmap, int width, int height) {
+  public static Bitmap resizeBitmapIfNeeded(@NonNull Bitmap bitmap, int width, int height) {
     if (bitmap.getWidth() == width && bitmap.getHeight() == height) {
       return bitmap;
     }
@@ -291,7 +304,9 @@ public final class Utils {
   }
 
   public static void saveLayerCompat(Canvas canvas, RectF rect, Paint paint, int flag) {
-    L.beginSection("Utils#saveLayer");
+    if (L.isTraceEnabled()) {
+      L.beginSection("Utils#saveLayer");
+    }
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
       // This method was deprecated in API level 26 and not recommended since 22, but its
       // 2-parameter replacement is only available starting at API level 21.
@@ -299,7 +314,16 @@ public final class Utils {
     } else {
       canvas.saveLayer(rect, paint);
     }
-    L.endSection("Utils#saveLayer");
+    if (L.isTraceEnabled()) {
+      L.endSection("Utils#saveLayer");
+    }
+  }
+
+  /**
+   * Multiplies 2 opacities that are 0-255.
+   */
+  public static int mixOpacities(int opacity1, int opacity2) {
+    return (int) ((opacity1 / 255f * opacity2 / 255f) * 255f);
   }
 
   /**

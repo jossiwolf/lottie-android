@@ -1,20 +1,192 @@
-# 5.3.0
+# 6.7.1
+* Safeguard against very large Bitmap creation ([#2662](https://github.com/airbnb/lottie-android/pull/2662))
+
+# 6.7.0
 ### New Features
+* Initial support for 3D animations ([#2666](https://github.com/airbnb/lottie-android/pull/2666) and [#2673](https://github.com/airbnb/lottie-android/pull/2673))
+
+# 6.6.10
+* Add RTL support to lottie-android ([#2663](https://github.com/airbnb/lottie-android/pull/2663))
+* Make `lottieComposition` public ([#2660](https://github.com/airbnb/lottie-android/pull/2660))
+
+# 6.6.9
+* Fix transparent background rendering with MULTIPLY Blend mode on Android 34+ ([#2661](https://github.com/airbnb/lottie-android/pull/2661))
+
+# 6.6.8
+* In DefaultLottieFetchResult, catch NPE from getErrorFromConnection() ([#2643](https://github.com/airbnb/lottie-android/pull/2643))
+* Enable path interpolator cache by default ([#2646](https://github.com/airbnb/lottie-android/pull/2646))
+* Update compileSDK and targetSDK to 36 ([#2652](https://github.com/airbnb/lottie-android/pull/2652))
+
+# 6.6.7
+* Fix crash when drawing shadow on image using RenderNode ([#2635](https://github.com/airbnb/lottie-android/pull/2635))
+
+# 6.6.6
+* Guard against Bitmap allocations of size 0 ([#2626](https://github.com/airbnb/lottie-android/pull/2626))
+
+# 6.6.5
+Skipped
+
+# 6.6.4
+* Fix an image NPE ([#2623](https://github.com/airbnb/lottie-android/pull/2623))
+
+# 6.6.3
+* Support system property to set a testing executor ([#2613](https://github.com/airbnb/lottie-android/pull/2613))
+* Fix a radial gradient crash ([#2611](https://github.com/airbnb/lottie-android/pull/2611))
+* Fix a bitmap crash ([#2578](https://github.com/airbnb/lottie-android/pull/2578))
+
+# 6.6.2
+### Bugs Fixed
+* Allow width/height to be doubles ([#2596](https://github.com/airbnb/lottie-android/pull/2596))
+* Re-measure line width when using dynamic text ([#2597](https://github.com/airbnb/lottie-android/pull/2597))
+* Only apply parent alpha to mattes ([#2598](https://github.com/airbnb/lottie-android/pull/2598))
+* Fix binary compatibility with 6.5 ([#2591](https://github.com/airbnb/lottie-android/pull/2591))
+* Better handle clip specs with minProgress == maxProgress ([#2600](https://github.com/airbnb/lottie-android/pull/2600))
+
+# 6.6.1
+### Bugs Fixes
+* Fixed a floating point error calculating keyframe end progress ([#2588](https://github.com/airbnb/lottie-android/pull/2588))
+
+# 6.6.0
+### New Features
+* Overhauled drop shadow support for even better correctness ([#2548](https://github.com/airbnb/lottie-android/pull/2548))
+  * Major thanks to David Davidović (who works at [Lottielab](https://www.lottielab.com/)) for his contributions here.
+  * Adds a new API: `applyShadowsToLayers` which will apply shadows to a whole layer rather than an individual shape.
+  * Use RenderNodes on APIs that support it.
+  * Lays a foundation that can potentially add RenderNode support to existing mattes and masks.
+  * Fixed a number of existing correctness issues
+* Add an overload to LottieCompositionFactory.clearCache that clears the network cache ([#2559](https://github.com/airbnb/lottie-android/pull/2559/))
+
+### Bugs Fixed
+* Fix rounded corners when the underlying shape doesn't animate ([#2567](https://github.com/airbnb/lottie-android/pull/2567/))
+* Fix animation update listener order to be called after the internal frame has updated ([#2497](https://github.com/airbnb/lottie-android/pull/2497/))
+* Unify all parsing to more reliably handle all file types including dotLottie as ZIP files ([#2558](https://github.com/airbnb/lottie-android/pull/2558/))
+* Fix keypath resolving for matte layers ([#2544](https://github.com/airbnb/lottie-android/pull/2544/))
+* Apply translate before scale in LottieDrawable ([#2565](https://github.com/airbnb/lottie-android/pull/2565/))
+
+# 6.5.2
+### Bugs Fixed
+* Fix a NPE when running Lottie in instrumentation tests ([#2546](https://github.com/airbnb/lottie-android/pull/2546))
+* Add support for new reduced motion options in Compose ([#2542](https://github.com/airbnb/lottie-android/pull/2542))
+
+# 6.5.1
+### Bugs Fixed
+* Fix value callback is not called for PathKeyframeAnimation ([#2540](https://github.com/airbnb/lottie-android/pull/2540))
+* Fix shadow softness accuracy ([#2541](https://github.com/airbnb/lottie-android/pull/2541))
+* Add a global configuration to control reduced motion settings for a11y ([#2536](https://github.com/airbnb/lottie-android/pull/2536))
+* Fix a NPE on ImageAssetManager#getContext ([#2532](https://github.com/airbnb/lottie-android/pull/2532))
+* Improve strokes with skew ([#2531](https://github.com/airbnb/lottie-android/pull/2531))
+* LottieCompositionFactory: Avoid NPE when animation contains a Font Family and Context is null ([#2530](https://github.com/airbnb/lottie-android/pull/2530))
+* LottieCompositionFactory: Add factory methods that take an okio Source ([#2527](https://github.com/airbnb/lottie-android/pull/2527))
+* LottieCompositionFactory#fromZipStreamSyncInternal close FileOutputStream ([#2548](https://github.com/airbnb/lottie-android/pull/2548))
+
+# 6.5.0
+### New Features
+* Apply blend modes to layers and add Multiply ([#2519](https://github.com/airbnb/lottie-android/pull/2519))
+* Add initial support for text range selectors ([#2518](https://github.com/airbnb/lottie-android/pull/2518))
+* Add a new feature flag API to allow for opting into newer platform features ([#2512](https://github.com/airbnb/lottie-android/pull/2512))
+* Add an API to get the unscaled width/height of a composition ([#2514](https://github.com/airbnb/lottie-android/pull/2514))
+
+### Bugs Fixes
+* Improve the accuracy of drop shadow position and softness ([#2523](https://github.com/airbnb/lottie-android/pull/2523))
+* Treat appcompat as an API dependency ([#2507](https://github.com/airbnb/lottie-android/pull/2507))
+
+# 6.4.1
+### Bugs Fixed
+* Scale base64 encoded bitmaps ([#2501](https://github.com/airbnb/lottie-android/pull/2501))
+* Prevent systrace strings from getting created when systrace is off ([#2493](https://github.com/airbnb/lottie-android/pull/2493))
+* Allow missing end values for integer animations ([#2487](https://github.com/airbnb/lottie-android/pull/2487))
+* Add an extra null check in BaseKeyframeAnimation ([#2486](https://github.com/airbnb/lottie-android/pull/2486))
+
+# 6.4.0
+### New Features
+* Add support for reduced motion marker names ([#2451](https://github.com/airbnb/lottie-android/pull/2451))
+* Support GZIP and TGS network downloads ([#2454](https://github.com/airbnb/lottie-android/pull/2454))
+### Bugs Fixed
+* Allow easings to go <0 and >1 ([#2457](https://github.com/airbnb/lottie-android/pull/2457))
+* Fix a memory leak in LottieTask ([#2465](https://github.com/airbnb/lottie-android/pull/2465))
+* Prevent play from working after a non-Lottie drawable was set and then returned back ([#2468](https://github.com/airbnb/lottie-android/pull/2468))
+* Respect autoPlay in LottieAnimationView when setting a new composition ([#2469](https://github.com/airbnb/lottie-android/pull/2469))
+* Call LottieTask synchronously when already on the main thread ([#2470](https://github.com/airbnb/lottie-android/pull/2470))
+* Properly rescale bitmaps when the system scale changes ([#2475](https://github.com/airbnb/lottie-android/pull/2475))
+
+# 6.3.0
+### New Features
+* Add support dynamic path properties on shape contents ([#2439](https://github.com/airbnb/lottie-android/pull/2439))
+* Add support for gzipped and tgs files ([#2435](https://github.com/airbnb/lottie-android/pull/2435))
+* Add an option to clip text if it extends beyond its bounding box ([#2412](https://github.com/airbnb/lottie-android/pull/2412))
+
+### Bugs Fixed
+* Make all LottieAnimationView setters idempotent ([#2441](https://github.com/airbnb/lottie-android/pull/2441))
+* Fix a rendering artifact for polygons with large strokes ([#2440](https://github.com/airbnb/lottie-android/pull/2440))
+* Re-scale bitmaps if the system scale changes ([#2438](https://github.com/airbnb/lottie-android/pull/2438))
+* Handle null color callbacks in solid layer ([#2434](https://github.com/airbnb/lottie-android/pull/2434))
+* Handle null shape data end values ([#2433](https://github.com/airbnb/lottie-android/pull/2433))
+* Fix gradient colors when the progress is <0 or > 1 ([#2427](https://github.com/airbnb/lottie-android/pull/2427))
+
+# 6.2.0
+### New Features
+* Implement screen, overlay, darken, lighten, and add blend modes ([#2408](https://github.com/airbnb/lottie-android/pull/2408))
+* Implement auto-orient ([#2416](https://github.com/airbnb/lottie-android/pull/2416))
+* Allow globally configuring asyncUpdates ([#2356](https://github.com/airbnb/lottie-android/pull/2356))
+* Add an optional `close` param to LottieCompositionFactory.fromJsonReader ([#2342](https://github.com/airbnb/lottie-android/pull/2342))
+* Allow dynamic properties for solid layer colors ([#2378](https://github.com/airbnb/lottie-android/pull/2378))
+* Update baseline profiles ([#2404](https://github.com/airbnb/lottie-android/pull/2404))
+* Add a ZipInputStream overload to LottieAnimationView.setAnimation ([#2411](https://github.com/airbnb/lottie-android/pull/2411))
+
+### Bugs Fixed
+* Upgrade okio ([#2418](https://github.com/airbnb/lottie-android/pull/2418))
+* Improve cache hits for synchronous LottieCompositionFactory methods ([#2379](https://github.com/airbnb/lottie-android/pull/2379))
+* Fix gradient interpolation for opacity stops beyond the last color stop ([#2377](https://github.com/airbnb/lottie-android/pull/2377))
+* Fix Potential NPE In NetworkCache.clearCache ([#2364](https://github.com/airbnb/lottie-android/pull/2364))
+* Fix an IllegalArgumentException when creating a bitmap ([#2351](https://github.com/airbnb/lottie-android/pull/2351))
+* Fix rounded corners for non-closed paths ([#2405](https://github.com/airbnb/lottie-android/pull/2405))
+* Fix varying opacity stops across keyframes in the same gradient  ([#2406](https://github.com/airbnb/lottie-android/pull/2406))
+* Fix a NullPointerException in ColorKeyframeAnimation  ([#2407](https://github.com/airbnb/lottie-android/pull/2407))
+
+# 6.1.0
+### New Features
+* New multithreaded `asyncUpdates` feature which moves the entire update phase of an animation off of the main thread. For more information, refer to [this blog post](https://gpeal.medium.com/lottie-android-6-1-lottie-goes-multithreaded-67c09c091fd7). ([#2276](https://github.com/airbnb/lottie-android/pull/2276))
+* Allow `LottieCompositionFactory` to not close input streams ([#2286](https://github.com/airbnb/lottie-android/pull/2286) and [#2319](https://github.com/airbnb/lottie-android/pull/2319))
+* Allow Lottie to be initialized multiple times ([#2323](https://github.com/airbnb/lottie-android/pull/2323))
+* Add an additional null check to TransformKeyframeAnimation ([#2381](https://github.com/airbnb/lottie-android/pull/2381))
+* Fix asyncUpdates for Nougat and below ([#2380](https://github.com/airbnb/lottie-android/pull/2380))
+
+### Bugs Fixed
+* Close input streams for cache hits ([#2253](https://github.com/airbnb/lottie-android/pull/2253))
+* Always use ApplicationContext in ImageAssetManager to ensure it can be reused ([#2289](https://github.com/airbnb/lottie-android/pull/2289))
+* Hold weak references to success/failure listeners ([#2293](https://github.com/airbnb/lottie-android/pull/2293))
+* Add default values for line join and cap types ([#2337](https://github.com/airbnb/lottie-android/pull/2337))
+* Apply layer parent opacity to text ([#2336](https://github.com/airbnb/lottie-android/pull/2336))
+
+# 6.0.1
+### Bugs Fixed
+* Allow loading URLs with a length of greater than 255 chars ([#2311](https://github.com/airbnb/lottie-android/pull/2311))
+
+# 6.0.0
+### New Features
+* Major overhaul of text layout. Text layout should be more consistent across the board ([#2162](https://github.com/airbnb/lottie-android/pull/2162))
 * Allow animations in zip files to contain embedded base64 encoded images ([#2110](https://github.com/airbnb/lottie-android/pull/2110))
 * Allow zip files to contain embedded fonts. Context was added to some LottieCompositionFactory APIs to support this ([#2102](https://github.com/airbnb/lottie-android/pull/2102))
 * Add fontStyle and fontName as parameters in new overloads in FontAssetDelegate ([#2103](https://github.com/airbnb/lottie-android/pull/2103))
 * Allow decimal values for precomp size ([#2138](https://github.com/airbnb/lottie-android/pull/2138))
-* Allow interpolating in between gradeients that have different numbers of opacity stops ([#2160](https://github.com/airbnb/lottie-android/pull/2160))
+* Allow interpolating in between gradients that have different numbers of opacity stops ([#2160](https://github.com/airbnb/lottie-android/pull/2160))
 * Support box position in document data ([#2139](https://github.com/airbnb/lottie-android/pull/2139))
 * Allow repeater contents to be the target of dynamic properties ([#2164](https://github.com/airbnb/lottie-android/pull/2164))
 * Provide a global LottieTask listener to aid in Espresso idle resources ([#2161](https://github.com/airbnb/lottie-android/pull/2161))
 * Allow setting a default font extension ([#2166](https://github.com/airbnb/lottie-android/pull/2166))
 * Add an option to completely disable Lottie's network cache ([#2158](https://github.com/airbnb/lottie-android/pull/2158))
+* Allow setting a font map for custom fonts ([#2180](https://github.com/airbnb/lottie-android/pull/2180))
+* Allow ImageAssetDelegate to be used when a drawable doesn't have a callback ([#2183](https://github.com/airbnb/lottie-android/pull/2072))
+* Make Layer name and refId public ([#2188](https://github.com/airbnb/lottie-android/pull/2188))
+* Allow rendering at the composition frame rate ([#2184](https://github.com/airbnb/lottie-android/pull/2184))
 ### Bugs Fixed
-* Fixed an NPE when decoding an invalid bitmap ([#2117](https://github.com/airbnb/lottie-android/pull/2117))
+* Fixed an NPE when decoding an invalid bitmap and for transform opacity, and transform anchor position ([#2117](https://github.com/airbnb/lottie-android/pull/2117), [#2179](https://github.com/airbnb/lottie-android/pull/2179), and [#2197](https://github.com/airbnb/lottie-android/pull/2197))
 * Only store application context in ImageAssetManager ([#2163](https://github.com/airbnb/lottie-android/pull/2163))
 * Prevent rounded corner effects from trying to round a shape that has control points on its vertices already ([#2165](https://github.com/airbnb/lottie-android/pull/2165))
 * Pass LottieComposition directly while building layers to avoid race conditions ([#2167](https://github.com/airbnb/lottie-android/pull/2167))
+* Allow progress to be restored from saved state ([#2072](https://github.com/airbnb/lottie-android/pull/2072))
+* Take top and left Drawable bounds into account to support things like SeekBar thumbs ([#2182](https://github.com/airbnb/lottie-android/pull/2182))
+* Use the correct cache key for network animations ([#2198](https://github.com/airbnb/lottie-android/pull/2198))
 
 # 5.2.0
 ### Bugs Fixed

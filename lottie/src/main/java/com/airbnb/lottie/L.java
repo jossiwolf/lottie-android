@@ -5,13 +5,15 @@ import android.content.Context;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RestrictTo;
-import androidx.core.os.TraceCompat;
 
+import com.airbnb.lottie.configurations.reducemotion.ReducedMotionOption;
+import com.airbnb.lottie.configurations.reducemotion.SystemReducedMotionOption;
 import com.airbnb.lottie.network.DefaultLottieNetworkFetcher;
 import com.airbnb.lottie.network.LottieNetworkCacheProvider;
 import com.airbnb.lottie.network.LottieNetworkFetcher;
 import com.airbnb.lottie.network.NetworkCache;
 import com.airbnb.lottie.network.NetworkFetcher;
+import com.airbnb.lottie.utils.LottieTrace;
 
 import java.io.File;
 
@@ -21,19 +23,18 @@ public class L {
   public static boolean DBG = false;
   public static final String TAG = "LOTTIE";
 
-  private static final int MAX_DEPTH = 20;
   private static boolean traceEnabled = false;
   private static boolean networkCacheEnabled = true;
-  private static String[] sections;
-  private static long[] startTimeNs;
-  private static int traceDepth = 0;
-  private static int depthPastMaxDepth = 0;
+  private static boolean disablePathInterpolatorCache = false;
+  private static AsyncUpdates defaultAsyncUpdates = AsyncUpdates.AUTOMATIC;
 
   private static LottieNetworkFetcher fetcher;
   private static LottieNetworkCacheProvider cacheProvider;
 
   private static volatile NetworkFetcher networkFetcher;
   private static volatile NetworkCache networkCache;
+  private static ThreadLocal<LottieTrace> lottieTrace;
+  private static ReducedMotionOption reducedMotionOption = new SystemReducedMotionOption();
 
   private L() {
   }
@@ -43,10 +44,13 @@ public class L {
       return;
     }
     traceEnabled = enabled;
-    if (traceEnabled) {
-      sections = new String[MAX_DEPTH];
-      startTimeNs = new long[MAX_DEPTH];
+    if (traceEnabled && lottieTrace == null) {
+      lottieTrace = new ThreadLocal<>();
     }
+  }
+
+  public static boolean isTraceEnabled(){
+    return traceEnabled;
   }
 
   public static void setNetworkCacheEnabled(boolean enabled) {
@@ -57,42 +61,41 @@ public class L {
     if (!traceEnabled) {
       return;
     }
-    if (traceDepth == MAX_DEPTH) {
-      depthPastMaxDepth++;
-      return;
-    }
-    sections[traceDepth] = section;
-    startTimeNs[traceDepth] = System.nanoTime();
-    TraceCompat.beginSection(section);
-    traceDepth++;
+    getTrace().beginSection(section);
   }
 
   public static float endSection(String section) {
-    if (depthPastMaxDepth > 0) {
-      depthPastMaxDepth--;
-      return 0;
-    }
     if (!traceEnabled) {
       return 0;
     }
-    traceDepth--;
-    if (traceDepth == -1) {
-      throw new IllegalStateException("Can't end trace section. There are none.");
+    return getTrace().endSection(section);
+  }
+
+  private static LottieTrace getTrace() {
+    LottieTrace trace = lottieTrace.get();
+    if (trace == null) {
+      trace = new LottieTrace();
+      lottieTrace.set(trace);
     }
-    if (!section.equals(sections[traceDepth])) {
-      throw new IllegalStateException("Unbalanced trace call " + section +
-          ". Expected " + sections[traceDepth] + ".");
-    }
-    TraceCompat.endSection();
-    return (System.nanoTime() - startTimeNs[traceDepth]) / 1000000f;
+    return trace;
   }
 
   public static void setFetcher(LottieNetworkFetcher customFetcher) {
+    if ((fetcher == null && customFetcher == null) || (fetcher != null && fetcher.equals(customFetcher))) {
+      return;
+    }
+
     fetcher = customFetcher;
+    networkFetcher = null;
   }
 
   public static void setCacheProvider(LottieNetworkCacheProvider customProvider) {
+    if ((cacheProvider == null && customProvider == null) || (cacheProvider != null && cacheProvider.equals(customProvider))) {
+      return;
+    }
+
     cacheProvider = customProvider;
+    networkCache = null;
   }
 
   @NonNull
@@ -120,14 +123,33 @@ public class L {
       synchronized (NetworkCache.class) {
         local = networkCache;
         if (local == null) {
-          networkCache = local = new NetworkCache(cacheProvider != null ? cacheProvider : new LottieNetworkCacheProvider() {
-            @Override @NonNull public File getCacheDir() {
-              return new File(appContext.getCacheDir(), "lottie_network_cache");
-            }
-          });
+          networkCache = local = new NetworkCache(cacheProvider != null ? cacheProvider :
+              () -> new File(appContext.getCacheDir(), "lottie_network_cache"));
         }
       }
     }
     return local;
   }
+
+  public static void setDisablePathInterpolatorCache(boolean disablePathInterpolatorCache) {
+    L.disablePathInterpolatorCache = disablePathInterpolatorCache;
+  }
+
+  public static boolean getDisablePathInterpolatorCache() {
+    return disablePathInterpolatorCache;
+  }
+
+  public static void setDefaultAsyncUpdates(AsyncUpdates asyncUpdates) {
+    L.defaultAsyncUpdates = asyncUpdates;
+  }
+
+  public static AsyncUpdates getDefaultAsyncUpdates() {
+    return L.defaultAsyncUpdates;
+  }
+
+  public static void setReducedMotionOption(ReducedMotionOption reducedMotionOption){
+    L.reducedMotionOption = reducedMotionOption;
+  }
+
+  public static ReducedMotionOption getReducedMotionOption(){return reducedMotionOption;}
 }

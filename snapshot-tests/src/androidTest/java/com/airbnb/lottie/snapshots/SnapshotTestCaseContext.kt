@@ -1,6 +1,7 @@
 package com.airbnb.lottie.snapshots
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
@@ -56,7 +57,7 @@ suspend fun SnapshotTestCaseContext.withDrawable(
     assetName: String,
     snapshotName: String,
     snapshotVariant: String,
-    callback: (LottieDrawable) -> Unit,
+    callback: suspend (LottieDrawable) -> Unit,
 ) {
     val result = LottieCompositionFactory.fromAssetSync(context, assetName)
     val composition = result.value ?: throw IllegalArgumentException("Unable to parse $assetName.", result.exception)
@@ -144,6 +145,7 @@ suspend fun SnapshotTestCaseContext.snapshotComposition(
     val filmStripView = filmStripViewPool.acquire()
     filmStripView.setOutlineMasksAndMattes(false)
     filmStripView.setApplyingOpacityToLayersEnabled(false)
+    filmStripView.setUseCompositionFrameRate(false)
     filmStripView.setImageAssetDelegate { BitmapFactory.decodeResource(context.resources, R.drawable.airbnb) }
     if (composition.characters.isEmpty) {
         filmStripView.setFontAssetDelegate(object : FontAssetDelegate() {
@@ -253,4 +255,8 @@ private suspend fun View.awaitFrame() {
             cont.resume(Unit)
         }
     }
+}
+
+internal fun SnapshotTestCaseContext.getBitmapFromAssets(name: String): Bitmap {
+    return BitmapFactory.decodeStream(context.assets.open(name), null, BitmapFactory.Options())!!
 }

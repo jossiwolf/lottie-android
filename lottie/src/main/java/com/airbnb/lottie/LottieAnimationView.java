@@ -15,7 +15,6 @@ import android.os.Parcelable;
 import android.text.TextUtils;
 import android.util.AttributeSet;
 import android.util.Log;
-
 import androidx.annotation.AttrRes;
 import androidx.annotation.DrawableRes;
 import androidx.annotation.FloatRange;
@@ -26,7 +25,6 @@ import androidx.annotation.RawRes;
 import androidx.annotation.RequiresApi;
 import androidx.appcompat.content.res.AppCompatResources;
 import androidx.appcompat.widget.AppCompatImageView;
-
 import com.airbnb.lottie.model.KeyPath;
 import com.airbnb.lottie.utils.Logger;
 import com.airbnb.lottie.utils.Utils;
@@ -36,14 +34,16 @@ import com.airbnb.lottie.value.SimpleLottieValueCallback;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
+import java.lang.ref.WeakReference;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.zip.ZipInputStream;
 
 /**
  * This view will load, deserialize, and display an After Effects animation exported with
- * bodymovin (https://github.com/bodymovin/bodymovin).
+ * bodymovin (<a href="https://github.com/airbnb/lottie-web">github.com/airbnb/lottie-web</a>).
  * <p>
  * You may set the animation in one of two ways:
  * 1) Attrs: {@link R.styleable#LottieAnimationView_lottie_fileName}
@@ -74,18 +74,49 @@ import java.util.Set;
     throw new IllegalStateException("Unable to parse composition", throwable);
   };
 
-  private final LottieListener<LottieComposition> loadedListener = this::setComposition;
+  private final LottieListener<LottieComposition> loadedListener = new WeakSuccessListener(this);
 
-  private final LottieListener<Throwable> wrappedFailureListener = new LottieListener<Throwable>() {
-    @Override
-    public void onResult(Throwable result) {
-      if (fallbackResource != 0) {
-        setImageResource(fallbackResource);
+  private static class WeakSuccessListener implements LottieListener<LottieComposition> {
+
+    private final WeakReference<LottieAnimationView> targetReference;
+
+    public WeakSuccessListener(LottieAnimationView target) {
+      this.targetReference = new WeakReference<>(target);
+    }
+
+    @Override public void onResult(LottieComposition result) {
+      LottieAnimationView targetView = targetReference.get();
+      if (targetView == null) {
+        return;
       }
-      LottieListener<Throwable> l = failureListener == null ? DEFAULT_FAILURE_LISTENER : failureListener;
+      targetView.setComposition(result);
+    }
+  }
+
+  private final LottieListener<Throwable> wrappedFailureListener = new WeakFailureListener(this);
+
+  private static class WeakFailureListener implements LottieListener<Throwable> {
+
+    private final WeakReference<LottieAnimationView> targetReference;
+
+    public WeakFailureListener(LottieAnimationView target) {
+      this.targetReference = new WeakReference<>(target);
+    }
+
+    @Override public void onResult(Throwable result) {
+      LottieAnimationView targetView = targetReference.get();
+      if (targetView == null) {
+        return;
+      }
+
+      if (targetView.fallbackResource != 0) {
+        targetView.setImageResource(targetView.fallbackResource);
+      }
+      LottieListener<Throwable> l = targetView.failureListener == null ? DEFAULT_FAILURE_LISTENER : targetView.failureListener;
       l.onResult(result);
     }
-  };
+  }
+
   @Nullable private LottieListener<Throwable> failureListener;
   @DrawableRes private int fallbackResource = 0;
 
@@ -108,10 +139,6 @@ import java.util.Set;
   private final Set<LottieOnCompositionLoadedListener> lottieOnCompositionLoadedListeners = new HashSet<>();
 
   @Nullable private LottieTask<LottieComposition> compositionTask;
-  /**
-   * Can be null because it is created async
-   */
-  @Nullable private LottieComposition composition;
 
   public LottieAnimationView(Context context) {
     super(context);
@@ -181,6 +208,10 @@ import java.util.Set;
       setClipToCompositionBounds(ta.getBoolean(R.styleable.LottieAnimationView_lottie_clipToCompositionBounds, true));
     }
 
+    if (ta.hasValue(R.styleable.LottieAnimationView_lottie_clipTextToBoundingBox)) {
+      setClipTextToBoundingBox(ta.getBoolean(R.styleable.LottieAnimationView_lottie_clipTextToBoundingBox, false));
+    }
+
     if (ta.hasValue(R.styleable.LottieAnimationView_lottie_defaultFontFileExtension)) {
       setDefaultFontFileExtension(ta.getString(R.styleable.LottieAnimationView_lottie_defaultFontFileExtension));
     }
@@ -192,6 +223,11 @@ import java.util.Set;
 
     enableMergePathsForKitKatAndAbove(ta.getBoolean(
         R.styleable.LottieAnimationView_lottie_enableMergePathsForKitKatAndAbove, false));
+    setApplyingOpacityToLayersEnabled(ta.getBoolean(
+        R.styleable.LottieAnimationView_lottie_applyOpacityToLayers, false));
+    setApplyingShadowToLayersEnabled(ta.getBoolean(
+        R.styleable.LottieAnimationView_lottie_applyShadowToLayers, true));
+
     if (ta.hasValue(R.styleable.LottieAnimationView_lottie_colorFilter)) {
       int colorRes = ta.getResourceId(R.styleable.LottieAnimationView_lottie_colorFilter, -1);
       ColorStateList csl = AppCompatResources.getColorStateList(getContext(), colorRes);
@@ -209,6 +245,14 @@ import java.util.Set;
       setRenderMode(RenderMode.values()[renderModeOrdinal]);
     }
 
+    if (ta.hasValue(R.styleable.LottieAnimationView_lottie_asyncUpdates)) {
+      int asyncUpdatesOrdinal = ta.getInt(R.styleable.LottieAnimationView_lottie_asyncUpdates, AsyncUpdates.AUTOMATIC.ordinal());
+      if (asyncUpdatesOrdinal >= RenderMode.values().length) {
+        asyncUpdatesOrdinal = AsyncUpdates.AUTOMATIC.ordinal();
+      }
+      setAsyncUpdates(AsyncUpdates.values()[asyncUpdatesOrdinal]);
+    }
+
     setIgnoreDisabledSystemAnimations(
         ta.getBoolean(
             R.styleable.LottieAnimationView_lottie_ignoreDisabledSystemAnimations,
@@ -216,22 +260,30 @@ import java.util.Set;
         )
     );
 
-    ta.recycle();
+    if (ta.hasValue(R.styleable.LottieAnimationView_lottie_useCompositionFrameRate)) {
+      setUseCompositionFrameRate(ta.getBoolean(R.styleable.LottieAnimationView_lottie_useCompositionFrameRate, false));
+    }
 
-    lottieDrawable.setSystemAnimationsAreEnabled(Utils.getAnimationScale(getContext()) != 0f);
+    ta.recycle();
   }
 
   @Override public void setImageResource(int resId) {
+    this.animationResId = 0;
+    animationName = null;
     cancelLoaderTask();
     super.setImageResource(resId);
   }
 
   @Override public void setImageDrawable(Drawable drawable) {
+    this.animationResId = 0;
+    animationName = null;
     cancelLoaderTask();
     super.setImageDrawable(drawable);
   }
 
   @Override public void setImageBitmap(Bitmap bm) {
+    this.animationResId = 0;
+    animationName = null;
     cancelLoaderTask();
     super.setImageBitmap(bm);
   }
@@ -328,9 +380,25 @@ import java.util.Set;
    * Defaults to false.
    *
    * @param ignore if true animations will run even when they are disabled in the system settings.
+   * @deprecated Use {@link com.airbnb.lottie.configurations.reducemotion.IgnoreDisabledSystemAnimationsOption}
+   * instead and set them on the {@link LottieConfig}
    */
+  @Deprecated
   public void setIgnoreDisabledSystemAnimations(boolean ignore) {
     lottieDrawable.setIgnoreDisabledSystemAnimations(ignore);
+  }
+
+  /**
+   * Lottie files can specify a target frame rate. By default, Lottie ignores it and re-renders
+   * on every frame. If that behavior is undesirable, you can set this to true to use the composition
+   * frame rate instead.
+   * <p>
+   * Note: composition frame rates are usually lower than display frame rates
+   * so this will likely make your animation feel janky. However, it may be desirable
+   * for specific situations such as pixel art that are intended to have low frame rates.
+   */
+  public void setUseCompositionFrameRate(boolean useCompositionFrameRate) {
+    lottieDrawable.setUseCompositionFrameRate(useCompositionFrameRate);
   }
 
   /**
@@ -341,14 +409,32 @@ import java.util.Set;
    * instead of using merge paths.
    */
   public void enableMergePathsForKitKatAndAbove(boolean enable) {
-    lottieDrawable.enableMergePathsForKitKatAndAbove(enable);
+    lottieDrawable.enableFeatureFlag(LottieFeatureFlag.MergePathsApi19, enable);
   }
 
   /**
    * Returns whether merge paths are enabled for KitKat and above.
    */
   public boolean isMergePathsEnabledForKitKatAndAbove() {
-    return lottieDrawable.isMergePathsEnabledForKitKatAndAbove();
+    return lottieDrawable.isFeatureFlagEnabled(LottieFeatureFlag.MergePathsApi19);
+  }
+
+  /**
+   * Enable the specified feature for this LottieView.
+   * <p>
+   * Features guarded by LottieFeatureFlags are experimental or only supported by a subset of API levels.
+   * Please ensure that the animation supported by the enabled feature looks acceptable across all
+   * targeted API levels.
+   */
+  public void enableFeatureFlag(LottieFeatureFlag flag, boolean enable) {
+    lottieDrawable.enableFeatureFlag(flag, enable);
+  }
+
+  /**
+   * Returns whether the specified feature is enabled.
+   */
+  public boolean isFeatureFlagEnabled(LottieFeatureFlag flag) {
+    return lottieDrawable.isFeatureFlagEnabled(flag);
   }
 
   /**
@@ -406,7 +492,7 @@ import java.util.Set;
 
   private LottieTask<LottieComposition> fromRawRes(@RawRes final int rawRes) {
     if (isInEditMode()) {
-      return new LottieTask<>(() -> cacheComposition
+      return new LottieTask<>(getContext().getMainLooper(), () -> cacheComposition
           ? LottieCompositionFactory.fromRawResSync(getContext(), rawRes) : LottieCompositionFactory.fromRawResSync(getContext(), rawRes, null), true);
     } else {
       return cacheComposition ?
@@ -422,7 +508,7 @@ import java.util.Set;
 
   private LottieTask<LottieComposition> fromAssets(final String assetName) {
     if (isInEditMode()) {
-      return new LottieTask<>(() -> cacheComposition ?
+      return new LottieTask<>(getContext().getMainLooper(), () -> cacheComposition ?
           LottieCompositionFactory.fromAssetSync(getContext(), assetName) : LottieCompositionFactory.fromAssetSync(getContext(), assetName, null), true);
     } else {
       return cacheComposition ?
@@ -451,11 +537,29 @@ import java.util.Set;
    * Sets the animation from an arbitrary InputStream.
    * This will load and deserialize the file asynchronously.
    * <p>
+   * If this is a Zip file, wrap your InputStream with a ZipInputStream to use the overload
+   * designed for zip files.
+   * <p>
    * This is particularly useful for animations loaded from the network. You can fetch the
    * bodymovin json from the network and pass it directly here.
+   * <p>
+   * Auto-closes the stream.
    */
   public void setAnimation(InputStream stream, @Nullable String cacheKey) {
-    setCompositionTask(LottieCompositionFactory.fromJsonInputStream(stream, cacheKey));
+    setCompositionTask(LottieCompositionFactory.fromJsonInputStream(getContext(), stream, cacheKey));
+  }
+
+  /**
+   * Sets the animation from a ZipInputStream.
+   * This will load and deserialize the file asynchronously.
+   * <p>
+   * This is particularly useful for animations loaded from the network. You can fetch the
+   * bodymovin json from the network and pass it directly here.
+   * <p>
+   * Auto-closes the stream.
+   */
+  public void setAnimation(ZipInputStream stream, @Nullable String cacheKey) {
+    setCompositionTask(LottieCompositionFactory.fromZipStream(getContext(), stream, cacheKey));
   }
 
   /**
@@ -528,6 +632,11 @@ import java.util.Set;
   }
 
   private void setCompositionTask(LottieTask<LottieComposition> compositionTask) {
+    LottieResult<LottieComposition> result = compositionTask.getResult();
+    LottieDrawable lottieDrawable = this.lottieDrawable;
+    if (result != null && lottieDrawable == getDrawable() && lottieDrawable.getComposition() == result.getValue()) {
+      return;
+    }
     userActionsTaken.add(UserActionTaken.SET_ANIMATION);
     clearComposition();
     cancelLoaderTask();
@@ -554,9 +663,11 @@ import java.util.Set;
     }
     lottieDrawable.setCallback(this);
 
-    this.composition = composition;
     ignoreUnschedule = true;
     boolean isNewComposition = lottieDrawable.setComposition(composition);
+    if (autoPlay) {
+      lottieDrawable.playAnimation();
+    }
     ignoreUnschedule = false;
     if (getDrawable() == lottieDrawable && !isNewComposition) {
       // We can avoid re-setting the drawable, and invalidating the view, since the composition
@@ -581,7 +692,7 @@ import java.util.Set;
   }
 
   @Nullable public LottieComposition getComposition() {
-    return composition;
+    return getDrawable() == lottieDrawable ? lottieDrawable.getComposition() : null;
   }
 
   /**
@@ -848,7 +959,7 @@ import java.util.Set;
    * Be wary if you are using many images, however. Lottie is designed to work with vector shapes
    * from After Effects. If your images look like they could be represented with vector shapes,
    * see if it is possible to convert them to shape layers and re-export your animation. Check
-   * the documentation at http://airbnb.io/lottie for more information about importing shapes from
+   * the documentation at <a href="http://airbnb.io/lottie">airbnb.io/lottie</a> for more information about importing shapes from
    * Sketch or Illustrator to avoid this.
    */
   public void setImageAssetsFolder(String imageAssetsFolder) {
@@ -899,7 +1010,7 @@ import java.util.Set;
    * Be wary if you are using many images, however. Lottie is designed to work with vector shapes
    * from After Effects. If your images look like they could be represented with vector shapes,
    * see if it is possible to convert them to shape layers and re-export your animation. Check
-   * the documentation at http://airbnb.io/lottie for more information about importing shapes from
+   * the documentation at <a href="http://airbnb.io/lottie">airbnb.io/lottie</a> for more information about importing shapes from
    * Sketch or Illustrator to avoid this.
    */
   public void setImageAssetDelegate(ImageAssetDelegate assetDelegate) {
@@ -963,6 +1074,13 @@ import java.util.Set;
   }
 
   /**
+   * Clear the value callback for all nodes that match the given {@link KeyPath} and property.
+   */
+  public <T> void clearValueCallback(KeyPath keyPath, T property) {
+    lottieDrawable.addValueCallback(keyPath, property, (LottieValueCallback<T>) null);
+  }
+
+  /**
    * Add a property callback for the specified {@link KeyPath}. This {@link KeyPath} can resolve
    * to multiple contents. In that case, the callback's value will apply to all of them.
    * <p>
@@ -989,6 +1107,7 @@ import java.util.Set;
 
   @MainThread
   public void cancelAnimation() {
+    autoPlay = false;
     userActionsTaken.add(UserActionTaken.PLAY_OPTION);
     lottieDrawable.cancelAnimation();
   }
@@ -1033,6 +1152,7 @@ import java.util.Set;
   }
 
   public long getDuration() {
+    LottieComposition composition = getComposition();
     return composition != null ? (long) composition.getDuration() : 0;
   }
 
@@ -1046,7 +1166,6 @@ import java.util.Set;
   }
 
   private void clearComposition() {
-    composition = null;
     lottieDrawable.clearComposition();
   }
 
@@ -1094,6 +1213,30 @@ import java.util.Set;
   }
 
   /**
+   * Returns the current value of {@link AsyncUpdates}. Refer to the docs for {@link AsyncUpdates} for more info.
+   */
+  public AsyncUpdates getAsyncUpdates() {
+    return lottieDrawable.getAsyncUpdates();
+  }
+
+  /**
+   * Similar to {@link #getAsyncUpdates()} except it returns the actual
+   * boolean value for whether async updates are enabled or not.
+   */
+  public boolean getAsyncUpdatesEnabled() {
+    return lottieDrawable.getAsyncUpdatesEnabled();
+  }
+
+  /**
+   * **Note: this API is experimental and may changed.**
+   * <p/>
+   * Sets the current value for {@link AsyncUpdates}. Refer to the docs for {@link AsyncUpdates} for more info.
+   */
+  public void setAsyncUpdates(AsyncUpdates asyncUpdates) {
+    lottieDrawable.setAsyncUpdates(asyncUpdates);
+  }
+
+  /**
    * Sets whether to apply opacity to the each layer instead of shape.
    * <p>
    * Opacity is normally applied directly to a shape. In cases where translucent shapes overlap, applying opacity to a layer will be more accurate
@@ -1110,6 +1253,39 @@ import java.util.Set;
   }
 
   /**
+   * Sets whether to apply drop shadows to each layer instead of shape.
+   * <p>
+   * When true, the behavior will be more correct: it will mimic lottie-web and other renderers, in that drop shadows will be applied to a layer
+   * as a whole, no matter its contents.
+   * <p>
+   * When false, the performance will be better at the expense of correctness: for each shape element individually, the first drop shadow upwards
+   * in the hierarchy is applied to it directly. Visually, this may manifest as phantom shadows or artifacts where the artist has intended to treat a
+   * layer as a whole, and this option exposes its internal structure.
+   * <p>
+   * The default value is true.
+   *
+   * @see LottieAnimationView::setApplyingOpacityToLayersEnabled
+   */
+  public void setApplyingShadowToLayersEnabled(boolean isApplyingShadowToLayersEnabled) {
+    lottieDrawable.setApplyingShadowToLayersEnabled(isApplyingShadowToLayersEnabled);
+  }
+
+  /**
+   * @see #setClipTextToBoundingBox(boolean)
+   */
+  public boolean getClipTextToBoundingBox() {
+    return lottieDrawable.getClipTextToBoundingBox();
+  }
+
+  /**
+   * When true, if there is a bounding box set on a text layer (paragraph text), any text
+   * that overflows past its height will not be drawn.
+   */
+  public void setClipTextToBoundingBox(boolean clipTextToBoundingBox) {
+    lottieDrawable.setClipTextToBoundingBox(clipTextToBoundingBox);
+  }
+
+  /**
    * This API no longer has any effect.
    */
   @Deprecated
@@ -1119,7 +1295,7 @@ import java.util.Set;
   }
 
   public boolean addLottieOnCompositionLoadedListener(@NonNull LottieOnCompositionLoadedListener lottieOnCompositionLoadedListener) {
-    LottieComposition composition = this.composition;
+    LottieComposition composition = getComposition();
     if (composition != null) {
       lottieOnCompositionLoadedListener.onCompositionLoaded(composition);
     }

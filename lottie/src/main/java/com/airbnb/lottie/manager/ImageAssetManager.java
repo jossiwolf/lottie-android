@@ -1,20 +1,23 @@
 package com.airbnb.lottie.manager;
+
+import android.app.Application;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.drawable.Drawable;
-import androidx.annotation.Nullable;
 import android.text.TextUtils;
 import android.util.Base64;
 import android.view.View;
+
+import androidx.annotation.Nullable;
 
 import com.airbnb.lottie.ImageAssetDelegate;
 import com.airbnb.lottie.LottieImageAsset;
 import com.airbnb.lottie.utils.Logger;
 import com.airbnb.lottie.utils.Utils;
+
 import java.io.IOException;
 import java.io.InputStream;
-import java.util.HashMap;
 import java.util.Map;
 
 public class ImageAssetManager {
@@ -103,8 +106,21 @@ public class ImageAssetManager {
         Logger.warning("data URL did not have correct base64 format.", e);
         return null;
       }
-      bitmap = BitmapFactory.decodeByteArray(data, 0, data.length, opts);
-      return putBitmap(id, bitmap);
+
+      try {
+        bitmap = BitmapFactory.decodeByteArray(data, 0, data.length, opts);
+      } catch (IllegalArgumentException e) {
+        Logger.warning("Unable to decode image `" + id + "`.", e);
+        return null;
+      }
+
+      if (bitmap == null) {
+        Logger.warning("Decoded image `" + id + "` is null.");
+        return null;
+      }
+
+      Bitmap resizedBitmap = Utils.resizeBitmapIfNeeded(bitmap, asset.getWidth(), asset.getHeight());
+      return putBitmap(id, resizedBitmap);
     }
 
     InputStream is;
@@ -134,7 +150,11 @@ public class ImageAssetManager {
   }
 
   public boolean hasSameContext(Context context) {
-    return context == null && this.context == null || this.context.equals(context);
+    if (context == null) {
+      return this.context == null;
+    }
+    Context contextToCompare = this.context instanceof Application ? context.getApplicationContext() : context;
+    return contextToCompare == this.context;
   }
 
   private Bitmap putBitmap(String key, @Nullable Bitmap bitmap) {

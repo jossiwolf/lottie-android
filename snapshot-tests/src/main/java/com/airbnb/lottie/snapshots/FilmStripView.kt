@@ -45,8 +45,16 @@ class FilmStripView @JvmOverloads constructor(
         animationViews.forEach { it.setApplyingOpacityToLayersEnabled(isApplyingOpacityToLayersEnabled) }
     }
 
+    fun setClipTextToBoundingBox(isApplyingOpacityToLayersEnabled: Boolean) {
+        animationViews.forEach { it.clipTextToBoundingBox = isApplyingOpacityToLayersEnabled }
+    }
+
     fun setOutlineMasksAndMattes(outline: Boolean) {
         animationViews.forEach { it.setOutlineMasksAndMattes(outline) }
+    }
+
+    fun setUseCompositionFrameRate(outline: Boolean) {
+        animationViews.forEach { it.setUseCompositionFrameRate(outline) }
     }
 
     private fun Float.round(decimals: Int): Float {

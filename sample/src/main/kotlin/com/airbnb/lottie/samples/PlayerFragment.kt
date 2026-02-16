@@ -14,6 +14,8 @@ import android.view.View
 import android.widget.EditText
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.MenuHost
+import androidx.core.view.MenuProvider
 import androidx.core.view.children
 import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
@@ -30,11 +32,12 @@ import com.airbnb.lottie.RenderMode
 import com.airbnb.lottie.model.KeyPath
 import com.airbnb.lottie.samples.databinding.PlayerFragmentBinding
 import com.airbnb.lottie.samples.model.CompositionArgs
+import com.airbnb.lottie.samples.utils.BaseFragment
+import com.airbnb.lottie.samples.utils.getParcelableCompat
 import com.airbnb.lottie.samples.utils.viewBinding
 import com.airbnb.lottie.samples.views.BottomSheetItemView
 import com.airbnb.lottie.samples.views.BottomSheetItemViewModel_
 import com.airbnb.lottie.samples.views.ControlBarItemToggleView
-import com.airbnb.mvrx.BaseMvRxFragment
 import com.airbnb.mvrx.fragmentViewModel
 import com.airbnb.mvrx.withState
 import com.github.mikephil.charting.components.LimitLine
@@ -47,7 +50,7 @@ import com.google.android.material.snackbar.Snackbar
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-class PlayerFragment : BaseMvRxFragment(R.layout.player_fragment) {
+class PlayerFragment : BaseFragment(R.layout.player_fragment) {
     private val binding: PlayerFragmentBinding by viewBinding()
     private val viewModel: PlayerViewModel by fragmentViewModel()
 
@@ -100,7 +103,25 @@ class PlayerFragment : BaseMvRxFragment(R.layout.player_fragment) {
         super.onViewCreated(view, savedInstanceState)
         (requireActivity() as AppCompatActivity).setSupportActionBar(binding.toolbar)
         (requireActivity() as AppCompatActivity).supportActionBar?.setDisplayShowTitleEnabled(false)
-        setHasOptionsMenu(true)
+        (requireActivity() as MenuHost).addMenuProvider(object : MenuProvider {
+
+            override fun onCreateMenu(menu: Menu, menuInflater: MenuInflater) {
+                menuInflater.inflate(R.menu.fragment_player, menu)
+            }
+
+            override fun onMenuItemSelected(item: MenuItem): Boolean {
+                if (item.isCheckable) item.isChecked = !item.isChecked
+                when (item.itemId) {
+                    android.R.id.home -> requireActivity().finish()
+                    R.id.visibility -> {
+                        viewModel.setDistractionFree(item.isChecked)
+                        val menuIcon = if (item.isChecked) R.drawable.ic_eye_teal else R.drawable.ic_eye_selector
+                        item.icon = ContextCompat.getDrawable(requireContext(), menuIcon)
+                    }
+                }
+                return true
+            }
+        }, viewLifecycleOwner, Lifecycle.State.RESUMED)
 
         binding.controlBarPlayerControls.lottieVersionView.text = getString(R.string.lottie_version, BuildConfig.VERSION_NAME)
 
@@ -110,23 +131,12 @@ class PlayerFragment : BaseMvRxFragment(R.layout.player_fragment) {
             }
         })
 
-        val args = arguments?.getParcelable<CompositionArgs>(EXTRA_ANIMATION_ARGS)
+        val args = arguments?.getParcelableCompat(EXTRA_ANIMATION_ARGS, CompositionArgs::class.java)
             ?: throw IllegalArgumentException("No composition args specified")
-        args.animationData?.bgColorInt?.let {
-            binding.controlBarBackgroundColor.backgroundButton1.setBackgroundColor(it)
-            binding.animationContainer.setBackgroundColor(it)
-            invertColor(it)
-        }
-
-        args.animationDataV2?.bgColorInt?.let {
-            binding.controlBarBackgroundColor.backgroundButton1.setBackgroundColor(it)
-            binding.animationContainer.setBackgroundColor(it)
-            invertColor(it)
-        }
 
         binding.controlBarTrim.minFrameView.setOnClickListener { showMinFrameDialog() }
         binding.controlBarTrim.maxFrameView.setOnClickListener { showMaxFrameDialog() }
-        viewModel.selectSubscribe(PlayerState::minFrame, PlayerState::maxFrame) { minFrame, maxFrame ->
+        viewModel.onEach(PlayerState::minFrame, PlayerState::maxFrame) { minFrame, maxFrame ->
             binding.animationView.setMinAndMaxFrame(minFrame, maxFrame)
             // I think this is a lint bug. It complains about int being <ErrorType>
             //noinspection StringFormatMatches
@@ -136,7 +146,7 @@ class PlayerFragment : BaseMvRxFragment(R.layout.player_fragment) {
         }
 
         viewModel.fetchAnimation(args)
-        viewModel.asyncSubscribe(PlayerState::composition, onFail = {
+        viewModel.onAsync(PlayerState::composition, onFail = {
             Snackbar.make(binding.coordinatorLayout, R.string.composition_load_error, Snackbar.LENGTH_LONG).show()
             Log.w(L.TAG, "Error loading composition.", it)
         }) {
@@ -145,7 +155,7 @@ class PlayerFragment : BaseMvRxFragment(R.layout.player_fragment) {
         }
 
         binding.controlBar.borderToggle.setOnClickListener { viewModel.toggleBorderVisible() }
-        viewModel.selectSubscribe(PlayerState::borderVisible) {
+        viewModel.onEach(PlayerState::borderVisible) {
             binding.controlBar.borderToggle.isActivated = it
             binding.controlBar.borderToggle.setImageResource(
                 if (it) R.drawable.ic_border_on
@@ -170,12 +180,12 @@ class PlayerFragment : BaseMvRxFragment(R.layout.player_fragment) {
             binding.controlBar.enableApplyingOpacityToLayers.isActivated = isApplyingOpacityToLayersEnabled
         }
 
-        viewModel.selectSubscribe(PlayerState::controlsVisible) { binding.controlBarPlayerControls.controlsContainer.animateVisible(it) }
+        viewModel.onEach(PlayerState::controlsVisible) { binding.controlBarPlayerControls.controlsContainer.animateVisible(it) }
 
-        viewModel.selectSubscribe(PlayerState::controlBarVisible) { binding.controlBar.root.animateVisible(it) }
+        viewModel.onEach(PlayerState::controlBarVisible) { binding.controlBar.root.animateVisible(it) }
 
         binding.controlBar.renderGraphToggle.setOnClickListener { viewModel.toggleRenderGraphVisible() }
-        viewModel.selectSubscribe(PlayerState::renderGraphVisible) {
+        viewModel.onEach(PlayerState::renderGraphVisible) {
             binding.controlBar.renderGraphToggle.isActivated = it
             binding.controlBarPlayerControls.renderTimesGraphContainer.animateVisible(it)
             binding.controlBarPlayerControls.renderTimesPerLayerButton.animateVisible(it)
@@ -183,38 +193,38 @@ class PlayerFragment : BaseMvRxFragment(R.layout.player_fragment) {
         }
 
         binding.controlBar.masksAndMattesToggle.setOnClickListener { viewModel.toggleOutlineMasksAndMattes() }
-        viewModel.selectSubscribe(PlayerState::outlineMasksAndMattes) {
+        viewModel.onEach(PlayerState::outlineMasksAndMattes) {
             binding.controlBar.masksAndMattesToggle.isActivated = it
             binding.animationView.setOutlineMasksAndMattes(it)
         }
 
         binding.controlBar.backgroundColorToggle.setOnClickListener { viewModel.toggleBackgroundColorVisible() }
         binding.controlBarBackgroundColor.closeBackgroundColorButton.setOnClickListener { viewModel.setBackgroundColorVisible(false) }
-        viewModel.selectSubscribe(PlayerState::backgroundColorVisible) {
+        viewModel.onEach(PlayerState::backgroundColorVisible) {
             binding.controlBar.backgroundColorToggle.isActivated = it
             binding.controlBarBackgroundColor.backgroundColorContainer.animateVisible(it)
         }
 
         binding.controlBar.trimToggle.setOnClickListener { viewModel.toggleTrimVisible() }
         binding.controlBarTrim.closeTrimButton.setOnClickListener { viewModel.setTrimVisible(false) }
-        viewModel.selectSubscribe(PlayerState::trimVisible) {
+        viewModel.onEach(PlayerState::trimVisible) {
             binding.controlBar.trimToggle.isActivated = it
             binding.controlBarTrim.trimContainer.animateVisible(it)
         }
 
         binding.controlBar.mergePathsToggle.setOnClickListener { viewModel.toggleMergePaths() }
-        viewModel.selectSubscribe(PlayerState::useMergePaths) {
+        viewModel.onEach(PlayerState::useMergePaths) {
             binding.animationView.enableMergePathsForKitKatAndAbove(it)
             binding.controlBar.mergePathsToggle.isActivated = it
         }
 
         binding.controlBar.speedToggle.setOnClickListener { viewModel.toggleSpeedVisible() }
         binding.controlBarSpeed.closeSpeedButton.setOnClickListener { viewModel.setSpeedVisible(false) }
-        viewModel.selectSubscribe(PlayerState::speedVisible) {
+        viewModel.onEach(PlayerState::speedVisible) {
             binding.controlBar.speedToggle.isActivated = it
             binding.controlBarSpeed.speedContainer.isVisible = it
         }
-        viewModel.selectSubscribe(PlayerState::speed) {
+        viewModel.onEach(PlayerState::speed) {
             binding.animationView.speed = it
             binding.controlBarSpeed.speedButtonsContainer
                 .children
@@ -238,7 +248,7 @@ class PlayerFragment : BaseMvRxFragment(R.layout.player_fragment) {
 
 
         binding.controlBarPlayerControls.loopButton.setOnClickListener { viewModel.toggleLoop() }
-        viewModel.selectSubscribe(PlayerState::repeatCount) {
+        viewModel.onEach(PlayerState::repeatCount) {
             binding.animationView.repeatCount = it
             binding.controlBarPlayerControls.loopButton.isActivated = binding.animationView.repeatCount == ValueAnimator.INFINITE
         }
@@ -392,25 +402,6 @@ class PlayerFragment : BaseMvRxFragment(R.layout.player_fragment) {
     override fun onDestroyView() {
         binding.animationView.removeAnimatorListener(animatorListener)
         super.onDestroyView()
-    }
-
-    override fun onCreateOptionsMenu(menu: Menu, inflater: MenuInflater) {
-        inflater.inflate(R.menu.fragment_player, menu)
-        super.onCreateOptionsMenu(menu, inflater)
-    }
-
-    override fun onOptionsItemSelected(item: MenuItem): Boolean {
-        if (item.isCheckable) item.isChecked = !item.isChecked
-        when (item.itemId) {
-            android.R.id.home -> requireActivity().finish()
-            R.id.info -> Unit
-            R.id.visibility -> {
-                viewModel.setDistractionFree(item.isChecked)
-                val menuIcon = if (item.isChecked) R.drawable.ic_eye_teal else R.drawable.ic_eye_selector
-                item.icon = ContextCompat.getDrawable(requireContext(), menuIcon)
-            }
-        }
-        return true
     }
 
     private fun onCompositionLoaded(composition: LottieComposition?) {

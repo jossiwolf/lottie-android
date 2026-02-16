@@ -15,15 +15,18 @@ import com.airbnb.lottie.LottieProperty;
 import com.airbnb.lottie.animation.LPaint;
 import com.airbnb.lottie.animation.keyframe.BaseKeyframeAnimation;
 import com.airbnb.lottie.animation.keyframe.ValueCallbackKeyframeAnimation;
+import com.airbnb.lottie.utils.DropShadow;
 import com.airbnb.lottie.value.LottieValueCallback;
 
 public class SolidLayer extends BaseLayer {
+
   private final RectF rect = new RectF();
   private final Paint paint = new LPaint();
   private final float[] points = new float[8];
   private final Path path = new Path();
   private final Layer layerModel;
   @Nullable private BaseKeyframeAnimation<ColorFilter, ColorFilter> colorFilterAnimation;
+  @Nullable private BaseKeyframeAnimation<Integer, Integer> colorAnimation;
 
   SolidLayer(LottieDrawable lottieDrawable, Layer layerModel) {
     super(lottieDrawable, layerModel);
@@ -34,15 +37,28 @@ public class SolidLayer extends BaseLayer {
     paint.setColor(layerModel.getSolidColor());
   }
 
-  @Override public void drawLayer(Canvas canvas, Matrix parentMatrix, int parentAlpha) {
+  @Override public void drawLayer(Canvas canvas, Matrix parentMatrix, int parentAlpha, @Nullable DropShadow shadowToApply) {
     int backgroundAlpha = Color.alpha(layerModel.getSolidColor());
     if (backgroundAlpha == 0) {
       return;
     }
 
+    Integer color = colorAnimation == null ? null : colorAnimation.getValue();
+    if (color != null) {
+      paint.setColor(color);
+    } else {
+      paint.setColor(layerModel.getSolidColor());
+    }
+
     int opacity = transform.getOpacity() == null ? 100 : transform.getOpacity().getValue();
     int alpha = (int) (parentAlpha / 255f * (backgroundAlpha / 255f * opacity / 100f) * 255);
     paint.setAlpha(alpha);
+    if (shadowToApply != null) {
+      shadowToApply.applyTo(paint);
+    } else {
+      paint.clearShadowLayer();
+    }
+
     if (colorFilterAnimation != null) {
       paint.setColorFilter(colorFilterAnimation.getValue());
     }
@@ -87,6 +103,13 @@ public class SolidLayer extends BaseLayer {
       } else {
         colorFilterAnimation =
             new ValueCallbackKeyframeAnimation<>((LottieValueCallback<ColorFilter>) callback);
+      }
+    } else if (property == LottieProperty.COLOR) {
+      if (callback == null) {
+        colorAnimation = null;
+        paint.setColor(layerModel.getSolidColor());
+      } else {
+        colorAnimation = new ValueCallbackKeyframeAnimation<>((LottieValueCallback<Integer>) callback);
       }
     }
   }
